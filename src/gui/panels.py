@@ -22,6 +22,18 @@ class InspectorPanel(QGroupBox):
         self.live_value = 0.0
 
         layout = QFormLayout()
+        
+        # --- Gesture Status Display ---
+        self.detected_gesture_label = QLabel("None")
+        font = self.detected_gesture_label.font()
+        font.setBold(True)
+        font.setPointSize(12)
+        self.detected_gesture_label.setFont(font)
+        self.detected_gesture_label.setStyleSheet("color: #33AFFF;") # Light blue color
+        layout.addRow("Detected Gesture:", self.detected_gesture_label)
+        layout.addRow("---", QLabel()) # Separator
+
+
         self.selected_points_label = QLabel("None")
         self.relationship_type_combo = QComboBox()
         self.relationship_type_combo.addItems(["Distance", "Angle"])
@@ -57,6 +69,16 @@ class InspectorPanel(QGroupBox):
         layout.addRow(add_condition_to_gesture_button)
         
         self.setLayout(layout)
+
+    def set_detected_gesture(self, gesture_name):
+        """Updates the gesture status label."""
+        if gesture_name:
+            self.detected_gesture_label.setText(gesture_name)
+            self.detected_gesture_label.setStyleSheet("color: #50FA7B;") # Green for detected
+        else:
+            self.detected_gesture_label.setText("None")
+            self.detected_gesture_label.setStyleSheet("color: #33AFFF;")
+
 
     def _update_constraint_combo(self, text):
         """Update constraint options based on relationship type."""
@@ -203,19 +225,41 @@ class ManagementPanel(QGroupBox):
         self.setLayout(layout)
 
     def add_condition_to_form(self, condition_str):
-        """Appends a new condition string to the conditions text area."""
+        """
+        Robustly appends a new condition string to the conditions text area.
+        Handles empty, malformed, or existing valid JSON lists.
+        """
         try:
             new_condition = json.loads(condition_str)
-            current_conditions_str = self.gesture_conditions_input.toPlainText()
-            
-            current_conditions = []
-            if current_conditions_str:
-                current_conditions = json.loads(current_conditions_str)
-            
-            current_conditions.append(new_condition)
-            self.gesture_conditions_input.setText(json.dumps(current_conditions, indent=2))
         except json.JSONDecodeError:
-            self.gesture_conditions_input.setText(f"[\n  {condition_str}\n]")
+            QMessageBox.warning(self, "Error", "The generated condition is not valid JSON.")
+            return
+
+        current_text = self.gesture_conditions_input.toPlainText().strip()
+        
+        conditions_list = []
+        if current_text:
+            try:
+                # Try to load the existing text as a JSON object
+                data = json.loads(current_text)
+                # Ensure it's a list we can append to
+                if isinstance(data, list):
+                    conditions_list = data
+                else:
+                    # If it's not a list (e.g., a single dict), wrap it in a list
+                    conditions_list = [data]
+            except json.JSONDecodeError:
+                # If text is not valid JSON, it's safer to not overwrite it.
+                # We can either warn the user or just append the new valid JSON after it.
+                # For now, let's just append and let the user fix it.
+                # A better long term solution would be a proper list view.
+                # For this fix, we will start a new list to avoid creating invalid JSON.
+                QMessageBox.warning(self, "Warning", "Existing conditions text is not valid JSON. Starting a new list.")
+                conditions_list = []
+
+        # Add the new condition and update the text area
+        conditions_list.append(new_condition)
+        self.gesture_conditions_input.setText(json.dumps(conditions_list, indent=2))
 
     def _emit_new_gesture(self):
         """Validates and emits gesture data to be saved."""
@@ -251,3 +295,4 @@ class ManagementPanel(QGroupBox):
     def clear_mapping_form(self):
         self.mapping_gesture_name_input.clear()
         self.mapping_details_input.clear()
+

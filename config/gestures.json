@@ -6,74 +6,24 @@
   },
   "gestures": [
     {
-      "name": "pinch",
-      "conditions": [
-        {
-          "type": "distance",
-          "points": [
-            4,
-            8
-          ],
-          "max": 0.05
-        }
-      ]
-    },
-    {
-      "name": "thumbs_up",
-      "conditions": [
-        {
-          "type": "angle",
-          "points": [
-            0,
-            4,
-            8
-          ],
-          "min": 150
-        }
-      ]
-    },
-    {
-      "name": "open_palm",
-      "conditions": [
-        {
-          "type": "distance",
-          "points": [
-            0,
-            12
-          ],
-          "min": 0.15
-        }
-      ]
-    },
-    {
       "name": "ok",
       "conditions": [
         {
-          "type": "angle",
+          "type": "distance",
           "points": [
-            0,
-            2,
+            8,
             4
           ],
-          "importance": "strict",
-          "min": 136.71,
-          "max": 167.09
+          "importance": "loose",
+          "max": 0.050
         }
       ]
     }
   ],
   "mappings": {
-    "pinch": {
+    "ok": {
       "type": "key_press",
-      "key": "space"
-    },
-    "thumbs_up": {
-      "type": "analogue",
-      "sensitivity": 10
-    },
-    "open_palm": {
-      "type": "key_press",
-      "key": "enter"
+      "key": "w"
     }
   }
 }

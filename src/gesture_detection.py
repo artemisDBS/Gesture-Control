@@ -12,9 +12,11 @@ class GestureDetector:
     """Detects gestures based on normalized hand keypoints."""
     
     def __init__(self, config: Dict):
-        self.config = config
-        self.transformations = config.get('transformations', {})
-        self.gesture_defs = config.get('gestures', [])
+        """Initializes the detector with a given configuration."""
+        self.config = {}
+        self.transformations = {}
+        self.gesture_defs = []
+        self.update_config(config) # Use the update method for initialization
         
         # MediaPipe hand landmark indices
         self.WRIST = 0
@@ -22,6 +24,16 @@ class GestureDetector:
         self.INDEX_TIP = 8
         self.MIDDLE_FINGER_BASE = 9
         self.MIDDLE_FINGER_TIP = 12
+
+    def update_config(self, new_config: Dict):
+        """
+        Updates the detector's configuration with a new set of gestures and transformations.
+        This is crucial for reloading configurations at runtime.
+        """
+        self.config = new_config
+        self.transformations = self.config.get('transformations', {})
+        self.gesture_defs = self.config.get('gestures', [])
+        print(f"GestureDetector updated with {len(self.gesture_defs)} gestures.")
     
     def normalize_keypoints(self, landmarks: List[Dict[str, float]]) -> List[Dict[str, float]]:
         """
@@ -73,7 +85,7 @@ class GestureDetector:
         if self.transformations.get('rotation_invariant', False):
             if len(normalized) > self.INDEX_TIP:
                 # Calculate angle between wrist and index finger
-                angle = self._calculate_angle(
+                angle = self._calculate_angle_2d(
                     normalized[self.WRIST],
                     normalized[self.INDEX_TIP]
                 )
@@ -140,7 +152,7 @@ class GestureDetector:
         min_dist = condition.get('min', float('-inf'))
         max_dist = condition.get('max', float('inf'))
         
-        return min_dist < distance < max_dist
+        return min_dist <= distance <= max_dist
     
     def _check_angle_condition(self, landmarks: List[Dict[str, float]], condition: Dict) -> bool:
         """Check if angle between three points meets the condition."""
@@ -148,20 +160,20 @@ class GestureDetector:
         if len(points) != 3:
             return False
         
-        point1_idx, point2_idx, point3_idx = points[0], points[1], points[2]
-        if any(idx >= len(landmarks) for idx in [point1_idx, point2_idx, point3_idx]):
+        p1_idx, p2_idx, p3_idx = points[0], points[1], points[2]
+        if any(idx >= len(landmarks) for idx in [p1_idx, p2_idx, p3_idx]):
             return False
         
         angle = self._calculate_angle_three_points(
-            landmarks[point1_idx],
-            landmarks[point2_idx],
-            landmarks[point3_idx]
+            landmarks[p1_idx],
+            landmarks[p2_idx], # Vertex
+            landmarks[p3_idx]
         )
         
         min_angle = condition.get('min', float('-inf'))
         max_angle = condition.get('max', float('inf'))
         
-        return min_angle < angle < max_angle
+        return min_angle <= angle <= max_angle
     
     def _check_position_condition(self, landmarks: List[Dict[str, float]], condition: Dict) -> bool:
         """Check if a point's position meets the condition."""
@@ -172,16 +184,12 @@ class GestureDetector:
         point = landmarks[point_idx]
         
         # Check x coordinate
-        if 'x_min' in condition and point['x'] < condition['x_min']:
-            return False
-        if 'x_max' in condition and point['x'] > condition['x_max']:
-            return False
+        if 'x_min' in condition and point['x'] < condition['x_min']: return False
+        if 'x_max' in condition and point['x'] > condition['x_max']: return False
         
         # Check y coordinate
-        if 'y_min' in condition and point['y'] < condition['y_min']:
-            return False
-        if 'y_max' in condition and point['y'] > condition['y_max']:
-            return False
+        if 'y_min' in condition and point['y'] < condition['y_min']: return False
+        if 'y_max' in condition and point['y'] > condition['y_max']: return False
         
         return True
     
@@ -192,39 +200,36 @@ class GestureDetector:
         dz = point1['z'] - point2['z']
         return math.sqrt(dx*dx + dy*dy + dz*dz)
     
-    def _calculate_angle(self, point1: Dict[str, float], point2: Dict[str, float]) -> float:
-        """Calculate angle between two points relative to horizontal."""
+    def _calculate_angle_2d(self, point1: Dict[str, float], point2: Dict[str, float]) -> float:
+        """Calculate 2D angle between two points relative to horizontal."""
         dx = point2['x'] - point1['x']
         dy = point2['y'] - point1['y']
         return math.atan2(dy, dx)
     
-    def _calculate_angle_three_points(self, point1: Dict[str, float], 
-                                    point2: Dict[str, float], 
-                                    point3: Dict[str, float]) -> float:
-        """Calculate angle at point2 between point1 and point3."""
-        # Vector from point2 to point1
-        v1x = point1['x'] - point2['x']
-        v1y = point1['y'] - point2['y']
+    def _calculate_angle_three_points(self, p1: Dict[str, float], 
+                                    p2: Dict[str, float], 
+                                    p3: Dict[str, float]) -> float:
+        """Calculate angle at p2 between p1 and p3 (in degrees)."""
+        # Create vectors from the vertex p2
+        v1 = {'x': p1['x'] - p2['x'], 'y': p1['y'] - p2['y']}
+        v2 = {'x': p3['x'] - p2['x'], 'y': p3['y'] - p2['y']}
         
-        # Vector from point2 to point3
-        v2x = point3['x'] - point2['x']
-        v2y = point3['y'] - point2['y']
+        # Dot product
+        dot_product = v1['x'] * v2['x'] + v1['y'] * v2['y']
         
-        # Calculate angle using dot product
-        dot_product = v1x * v2x + v1y * v2y
-        mag1 = math.sqrt(v1x * v1x + v1y * v1y)
-        mag2 = math.sqrt(v2x * v2x + v2y * v2y)
+        # Magnitude
+        mag1 = math.sqrt(v1['x']**2 + v1['y']**2)
+        mag2 = math.sqrt(v2['x']**2 + v2['y']**2)
         
         if mag1 == 0 or mag2 == 0:
-            return 0
+            return 0.0
         
+        # Cosine of the angle
         cos_angle = dot_product / (mag1 * mag2)
-        cos_angle = max(-1, min(1, cos_angle))  # Clamp to [-1, 1]
+        cos_angle = max(-1.0, min(1.0, cos_angle)) # Clamp to avoid domain errors
         
         angle_rad = math.acos(cos_angle)
-        angle_deg = math.degrees(angle_rad)
-        
-        return angle_deg
+        return math.degrees(angle_rad)
     
     def _rotate_points(self, landmarks: List[Dict[str, float]], angle: float) -> List[Dict[str, float]]:
         """Rotate all points around the origin by the given angle."""
@@ -248,79 +253,16 @@ class GestureDetector:
     def get_analogue_value(self, landmarks: List[Dict[str, float]], 
                           gesture_name: str) -> Optional[float]:
         """
-        Calculate analogue value for continuous gestures.
+        Calculate analogue value for continuous gestures. (Future enhancement)
         
         Args:
             landmarks: Current hand landmarks
             gesture_name: Name of the detected gesture
             
         Returns:
-            Analogue value (e.g., for volume control), or None if not applicable
+            Analogue value, or None if not applicable
         """
-        # For MVP, implement simple analogue control based on finger position
-        if gesture_name == "thumbs_up" and len(landmarks) > self.THUMB_TIP:
-            # Use thumb tip Y position as analogue value
-            # Lower Y = higher value (since Y increases downward in image coordinates)
-            return 1.0 - landmarks[self.THUMB_TIP]['y']
-        
+        # Placeholder for future implementation where analogue control
+        # could be defined in the JSON configuration.
         return None
 
-
-def test_gesture_detection():
-    """Test function to verify gesture detection logic."""
-    # Sample config
-    config = {
-        "transformations": {
-            "displacement_invariant": True,
-            "scale_invariant": True,
-            "rotation_invariant": False
-        },
-        "gestures": [
-            {
-                "name": "pinch",
-                "conditions": [
-                    {
-                        "type": "distance",
-                        "points": [4, 8],
-                        "max": 0.05
-                    }
-                ]
-            }
-        ]
-    }
-    
-    detector = GestureDetector(config)
-    
-    # Test with sample landmarks (pinch gesture)
-    sample_landmarks = [
-        {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Wrist
-        {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Thumb base
-        {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Thumb middle
-        {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Thumb tip
-        {'x': 0.48, 'y': 0.48, 'z': 0.0},  # Thumb tip (close to index)
-        {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Index base
-        {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Index middle
-        {'x': 0.5, 'y': 0.5, 'z': 0.0},  # Index tip
-        {'x': 0.49, 'y': 0.49, 'z': 0.0},  # Index tip (close to thumb)
-        # ... add more points to make it 21 total
-    ]
-    
-    # Pad to 21 points
-    while len(sample_landmarks) < 21:
-        sample_landmarks.append({'x': 0.5, 'y': 0.5, 'z': 0.0})
-    
-    # Test normalization
-    normalized = detector.normalize_keypoints(sample_landmarks)
-    print(f"Normalized landmarks: {len(normalized)} points")
-    
-    # Test gesture detection
-    gesture = detector.detect_gesture(normalized)
-    print(f"Detected gesture: {gesture}")
-    
-    # Test analogue value
-    analogue_val = detector.get_analogue_value(normalized, "thumbs_up")
-    print(f"Analogue value: {analogue_val}")
-
-
-if __name__ == "__main__":
-    test_gesture_detection()

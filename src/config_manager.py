@@ -25,6 +25,7 @@ class ConfigManager:
         """
         self.config_path = config_path
         self.config = {}
+        # The default_config is now a clean slate.
         self.default_config = self._get_default_config()
         
         # Ensure config directory exists
@@ -34,46 +35,18 @@ class ConfigManager:
         self.load_config()
     
     def _get_default_config(self) -> Dict[str, Any]:
-        """Get the default configuration structure."""
+        """
+        Get the default configuration structure. 
+        This is a blank slate, used for first-time setup or as a fallback.
+        """
         return {
             "transformations": {
                 "displacement_invariant": True,
                 "scale_invariant": True,
                 "rotation_invariant": False
             },
-            "gestures": [
-                {
-                    "name": "pinch",
-                    "conditions": [
-                        {
-                            "type": "distance",
-                            "points": [4, 8],
-                            "max": 0.05
-                        }
-                    ]
-                },
-                {
-                    "name": "thumbs_up",
-                    "conditions": [
-                        {
-                            "type": "angle",
-                            "points": [0, 4, 8],
-                            "min": 150
-                        }
-                    ]
-                }
-            ],
-            "mappings": {
-                "pinch": {
-                    "type": "key_press",
-                    "key": "space"
-                },
-                "thumbs_up": {
-                    "type": "scroll",
-                    "direction": "vertical",
-                    "sensitivity": 10
-                }
-            }
+            "gestures": [],
+            "mappings": {}
         }
     
     def load_config(self) -> bool:
@@ -91,19 +64,19 @@ class ConfigManager:
                 return True
             else:
                 logger.warning(f"Configuration file not found at {self.config_path}")
-                logger.info("Creating default configuration")
+                logger.info("Creating default (empty) configuration")
                 self.config = self.default_config.copy()
                 self.save_config()
                 return True
                 
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in configuration file: {str(e)}")
-            logger.info("Loading default configuration")
+            logger.info("Loading default (empty) configuration as a fallback.")
             self.config = self.default_config.copy()
             return False
         except Exception as e:
             logger.error(f"Error loading configuration: {str(e)}")
-            logger.info("Loading default configuration")
+            logger.info("Loading default (empty) configuration as a fallback.")
             self.config = self.default_config.copy()
             return False
     
@@ -287,13 +260,11 @@ class ConfigManager:
         """Validate a gesture definition."""
         required_fields = ['name', 'conditions']
         
-        # Check required fields
         for field in required_fields:
             if field not in gesture:
                 logger.error(f"Missing required field: {field}")
                 return False
         
-        # Check conditions
         conditions = gesture.get('conditions', [])
         if not isinstance(conditions, list) or len(conditions) == 0:
             logger.error("Gesture must have at least one condition")
@@ -309,7 +280,6 @@ class ConfigManager:
         """Validate a condition definition."""
         required_fields = ['type']
         
-        # Check required fields
         for field in required_fields:
             if field not in condition:
                 logger.error(f"Missing required field in condition: {field}")
@@ -337,13 +307,7 @@ class ConfigManager:
             logger.error("Distance condition must have exactly 2 points")
             return False
         
-        # Check for min/max values
-        has_constraint = False
-        if 'min' in condition:
-            has_constraint = True
-        if 'max' in condition:
-            has_constraint = True
-        
+        has_constraint = 'min' in condition or 'max' in condition
         if not has_constraint:
             logger.error("Distance condition must have 'min' or 'max' constraint")
             return False
@@ -360,13 +324,7 @@ class ConfigManager:
             logger.error("Angle condition must have exactly 3 points")
             return False
         
-        # Check for min/max values
-        has_constraint = False
-        if 'min' in condition:
-            has_constraint = True
-        if 'max' in condition:
-            has_constraint = True
-        
+        has_constraint = 'min' in condition or 'max' in condition
         if not has_constraint:
             logger.error("Angle condition must have 'min' or 'max' constraint")
             return False
@@ -379,12 +337,7 @@ class ConfigManager:
             logger.error("Position condition must have 'point' field")
             return False
         
-        # Check for at least one coordinate constraint
-        has_constraint = False
-        for coord in ['x_min', 'x_max', 'y_min', 'y_max']:
-            if coord in condition:
-                has_constraint = True
-        
+        has_constraint = any(k in condition for k in ['x_min', 'x_max', 'y_min', 'y_max'])
         if not has_constraint:
             logger.error("Position condition must have at least one coordinate constraint")
             return False
@@ -399,113 +352,13 @@ class ConfigManager:
         
         mapping_type = mapping['type']
         
-        if mapping_type == 'key_press':
-            return 'key' in mapping
-        elif mapping_type == 'key_hold':
-            return 'key' in mapping
-        elif mapping_type == 'mouse_click':
-            return True  # Button and clicks are optional
-        elif mapping_type == 'mouse_move':
-            return 'sensitivity' in mapping
-        elif mapping_type == 'scroll':
-            return 'sensitivity' in mapping
-        elif mapping_type == 'volume':
-            return 'sensitivity' in mapping
-        elif mapping_type == 'custom':
-            return 'command' in mapping
+        if mapping_type == 'key_press': return 'key' in mapping
+        elif mapping_type == 'key_hold': return 'key' in mapping
+        elif mapping_type == 'mouse_click': return True
+        elif mapping_type == 'mouse_move': return 'sensitivity' in mapping
+        elif mapping_type == 'scroll': return 'sensitivity' in mapping
+        elif mapping_type == 'volume': return 'sensitivity' in mapping
+        elif mapping_type == 'custom': return 'command' in mapping
         else:
             logger.error(f"Unknown mapping type: {mapping_type}")
             return False
-    
-    def reset_to_default(self) -> bool:
-        """Reset configuration to default values."""
-        try:
-            self.config = self.default_config.copy()
-            return self.save_config()
-        except Exception as e:
-            logger.error(f"Error resetting to default: {str(e)}")
-            return False
-    
-    def export_config(self, export_path: str) -> bool:
-        """
-        Export configuration to a different file.
-        
-        Args:
-            export_path: Path to export the configuration to
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            with open(export_path, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
-            logger.info(f"Configuration exported to {export_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Error exporting configuration: {str(e)}")
-            return False
-
-
-def test_config_manager():
-    """Test function to verify configuration management functionality."""
-    # Create a temporary config file for testing
-    test_config_path = "test_config.json"
-    
-    try:
-        # Initialize config manager
-        config_mgr = ConfigManager(test_config_path)
-        
-        # Test default config
-        print("Default config loaded:")
-        print(f"Transformations: {config_mgr.get_transformations()}")
-        print(f"Gestures: {len(config_mgr.get_gestures())} gestures")
-        print(f"Mappings: {len(config_mgr.get_mappings())} mappings")
-        
-        # Test adding a new gesture
-        new_gesture = {
-            "name": "fist",
-            "conditions": [
-                {
-                    "type": "distance",
-                    "points": [0, 8],
-                    "max": 0.1
-                }
-            ]
-        }
-        
-        success = config_mgr.add_gesture(new_gesture)
-        print(f"Added new gesture: {success}")
-        
-        # Test adding a mapping
-        new_mapping = {
-            "type": "key_press",
-            "key": "f"
-        }
-        
-        success = config_mgr.add_mapping("fist", new_mapping)
-        print(f"Added new mapping: {success}")
-        
-        # Test updating transformations
-        new_transformations = {
-            "displacement_invariant": True,
-            "scale_invariant": False,
-            "rotation_invariant": True
-        }
-        
-        success = config_mgr.update_transformations(new_transformations)
-        print(f"Updated transformations: {success}")
-        
-        # Show final config
-        print("\nFinal config:")
-        print(f"Transformations: {config_mgr.get_transformations()}")
-        print(f"Gestures: {len(config_mgr.get_gestures())} gestures")
-        print(f"Mappings: {len(config_mgr.get_mappings())} mappings")
-        
-    finally:
-        # Clean up test file
-        if os.path.exists(test_config_path):
-            os.remove(test_config_path)
-
-
-if __name__ == "__main__":
-    test_config_manager()
