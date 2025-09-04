@@ -3,65 +3,112 @@ Contains the VideoThread class for handling camera input and processing
 in a separate thread to keep the GUI responsive.
 """
 import cv2
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+import time
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, pyqtSlot
 from PyQt5.QtGui import QImage
 
+# --- Drawing Constants ---
+# Colors are in BGR format for OpenCV
+SELECTED_COLOR = (50, 255, 255)  # Yellow
+LANDMARK_COLOR = (50, 250, 50)  # Green
+CLICK_VIZ_COLOR = (0, 0, 255)    # Red
+TEXT_COLOR = (200, 100, 100) # Light Blue
+
+LANDMARK_RADIUS = 5
+CLICK_VIZ_RADIUS = 8
+CLICK_VIZ_THICKNESS = 2
+FONT = cv2.FONT_HERSHEY_COMPLEX
+FONT_SCALE = 0.4
+FONT_THICKNESS = 1
+
+
 class VideoThread(QThread):
-    """Thread to capture video, process landmarks, and detect gestures."""
+    """
+    A separate worker thread to handle all camera and model processing.
+    This prevents the main GUI from freezing by offloading heavy tasks.
+
+    Signals:
+        change_pixmap_signal: Emits the processed video frame as a QImage.
+        gesture_detected_signal: Emits the name of any detected gesture.
+        landmarks_signal: Emits both raw and normalized landmark data.
+    """
     change_pixmap_signal = pyqtSignal(QImage)
     gesture_detected_signal = pyqtSignal(str)
-    landmarks_signal = pyqtSignal(list)
+    landmarks_signal = pyqtSignal(list, list)
 
-    def __init__(self, hand_capture, gesture_detector, gui_instance):
-        super().__init__()
+    def __init__(self, hand_capture, gesture_detector, parent=None):
+        super().__init__(parent)
         self._run_flag = True
         self.hand_capture = hand_capture
         self.gesture_detector = gesture_detector
-        self.gui = gui_instance # To access selected_points for drawing
+
+        # State variables updated by the main thread
+        self.selected_points = []
+        self.click_viz_pos = None
+        self.click_viz_end_time = 0
 
     def run(self):
-        """Capture video and emit frames, gestures, and landmarks."""
+        """
+        The main loop for the video thread. Continuously captures frames,
+        processes them, and emits signals with the results.
+        """
         while self._run_flag:
             success, frame = self.hand_capture.read_frame()
             if not success:
-                self.msleep(10) # Wait a bit if frame reading fails
+                self.msleep(10)  # Wait a bit if frame reading fails
                 continue
 
-            landmarks = self.hand_capture.get_landmarks(frame)
+            # --- Core Processing ---
+            raw_landmarks = self.hand_capture.get_landmarks(frame)
             gesture_name = ""
+            normalized_landmarks = []
 
-            if landmarks:
-                self.landmarks_signal.emit(landmarks)
-                normalized_landmarks = self.gesture_detector.normalize_keypoints(landmarks)
-                gesture_name = self.gesture_detector.detect_gesture(normalized_landmarks)
+            if raw_landmarks:
+                # Normalize landmarks for gesture detection
+                normalized_landmarks = self.gesture_detector.normalize_keypoints(raw_landmarks)
+                # Check for a gesture using the normalized data
+                gesture_name = self.gesture_detector.detect_gesture(normalized_landmarks) or "hello there"
+                # Draw visualizations on the frame using the raw data
+                self.draw_landmarks(frame, raw_landmarks, self.selected_points)
 
-                # Draw landmarks on the frame
-                for i, landmark in enumerate(landmarks):
-                    x = int(landmark['x'] * frame.shape[1])
-                    y = int(landmark['y'] * frame.shape[0])
-                    # Highlight selected landmarks
-                    if i in self.gui.selected_points:
-                        cv2.circle(frame, (x, y), 6, (0, 255, 255), -1) # Yellow
-                        cv2.circle(frame, (x, y), 3, (0, 0, 0), -1)      # Black dot
-                    else:
-                        cv2.circle(frame, (x, y), 3, (0, 255, 0), -1) # Green
+            # --- Emit Signals to Main GUI Thread ---
+            self.gesture_detected_signal.emit(gesture_name)
+            self.landmarks_signal.emit(raw_landmarks or [], normalized_landmarks or [])
 
-            if gesture_name:
-                self.gesture_detected_signal.emit(gesture_name)
-                cv2.putText(frame, f"Gesture: {gesture_name}", (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            else:
-                self.gesture_detected_signal.emit("")
-
-            # Convert frame to QImage for display
+            # Convert the OpenCV frame (BGR) to a QImage (RGB) for display
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             qt_format_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            scaled_image = qt_format_image.scaled(640, 480, Qt.KeepAspectRatio)
-            self.change_pixmap_signal.emit(scaled_image)
+
+            self.change_pixmap_signal.emit(qt_format_image)
+
+    def draw_landmarks(self, frame, landmarks, selected_points):
+        """Draws circles and numbers for each landmark on the frame."""
+        for i, landmark in enumerate(landmarks):
+            x = int(landmark['x'] * frame.shape[1])
+            y = int(landmark['y'] * frame.shape[0])
+
+            # Use a different color for selected landmarks to provide feedback
+            color = SELECTED_COLOR if i in selected_points else LANDMARK_COLOR
+
+            cv2.circle(frame, (x, y), LANDMARK_RADIUS, color, -1)
+            cv2.putText(frame, str(i), (x + 8, y + 8),
+                        FONT, FONT_SCALE, TEXT_COLOR, FONT_THICKNESS)
+
+    @pyqtSlot(list)
+    def update_selected_points(self, points: list):
+        """Receives the latest list of selected points from the main thread."""
+        self.selected_points = points
+
+    @pyqtSlot(tuple)
+    def set_click_visualization(self, norm_pos: tuple):
+        """Receives a normalized click position to visualize for a short duration."""
+        self.click_viz_pos = norm_pos
+        self.click_viz_end_time = time.time() + 0.5  # Visualize for 0.5 seconds
 
     def stop(self):
-        """Sets run flag to False and waits for thread to finish."""
+        """Sets the flag to gracefully stop the thread's run loop."""
         self._run_flag = False
         self.wait()
+

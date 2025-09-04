@@ -15,7 +15,7 @@
             4
           ],
           "importance": "loose",
-          "max": 0.050
+          "max": 0.2038
         }
       ]
     }
@@ -23,7 +23,7 @@
   "mappings": {
     "ok": {
       "type": "key_press",
-      "key": "w"
+      "key": "enter"
     }
   }
 }

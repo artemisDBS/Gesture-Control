@@ -6,10 +6,11 @@ This file assembles all the UI panels and orchestrates the application's compone
 import sys
 import json
 import math
+import time
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout,
-                            QVBoxLayout, QMessageBox, QSplitter, QCheckBox, QSizePolicy)
-from PyQt5.QtCore import Qt, pyqtSlot, QPoint
+                             QVBoxLayout, QMessageBox, QSplitter, QCheckBox, QSizePolicy)
+from PyQt5.QtCore import Qt, pyqtSlot, QPoint, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage
 
 # Backend Imports
@@ -29,6 +30,8 @@ class GestureMapperGUI(QMainWindow):
     The main window for the Gesture Mapper application.
     Orchestrates the video feed, UI panels, and backend logic.
     """
+    selection_changed_signal = pyqtSignal(list)
+    click_visualization_signal = pyqtSignal(tuple)
 
     def __init__(self):
         super().__init__()
@@ -41,7 +44,9 @@ class GestureMapperGUI(QMainWindow):
         self.gesture_detector = GestureDetector(self.config_manager.get_config())
         self.command_executor = CommandExecutor(self.config_manager.get_mappings())
 
-        self.landmarks = []
+        # Correctly initialize landmark storage
+        self.raw_landmarks = []
+        self.normalized_landmarks = []
         self.selected_points = []
         self.commands_enabled = False
 
@@ -55,19 +60,16 @@ class GestureMapperGUI(QMainWindow):
         self._connect_signals()
         self._apply_stylesheet()
         
-        # Load initial config into UI
         self._reload_config()
 
     def _setup_ui_panels(self):
         """Creates and arranges the UI panels."""
-        # Video Feed Panel
         self.video_label = ClickableLabel("Initializing Camera...")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("border: 1px solid #555; background-color: #111;")
         self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.video_label.setScaledContents(False)
 
-        # Enable Commands Checkbox
         self.enable_commands_checkbox = QCheckBox("Enable Gesture Commands")
         self.enable_commands_checkbox.toggled.connect(self._toggle_commands)
 
@@ -77,7 +79,6 @@ class GestureMapperGUI(QMainWindow):
         video_widget = QWidget()
         video_widget.setLayout(video_layout)
         
-        # Right-side panels
         self.inspector_panel = InspectorPanel()
         self.config_panel = ConfigPanel()
         self.management_panel = ManagementPanel()
@@ -89,11 +90,10 @@ class GestureMapperGUI(QMainWindow):
         right_panel_widget = QWidget()
         right_panel_widget.setLayout(right_panel_layout)
 
-        # Splitter to make panels resizable
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(video_widget)
         splitter.addWidget(right_panel_widget)
-        splitter.setStretchFactor(0, 2) # Video panel takes more space initially
+        splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
 
         self.layout.addWidget(splitter, 0, 0)
@@ -106,23 +106,19 @@ class GestureMapperGUI(QMainWindow):
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.landmarks_signal.connect(self.on_landmarks_received)
         self.video_thread.gesture_detected_signal.connect(self.on_gesture_detected)
+        self.selection_changed_signal.connect(self.video_thread.update_selected_points)
+        self.click_visualization_signal.connect(self.video_thread.set_click_visualization)
         self.video_thread.start()
 
     def _connect_signals(self):
         """Connects signals from UI panels to slots in this main window."""
         self.video_label.clicked.connect(self.on_video_label_clicked)
-        
-        # Inspector Panel Signals
         self.inspector_panel.snapshot_requested.connect(
             lambda: self.inspector_panel.snapshot_condition(self.selected_points)
         )
         self.inspector_panel.selection_cleared.connect(self.clear_point_selection)
         self.inspector_panel.condition_generated.connect(self.management_panel.add_condition_to_form)
-
-        # Config Panel Signals
         self.config_panel.reload_requested.connect(self._reload_config)
-        
-        # Management Panel Signals
         self.management_panel.new_gesture_to_save.connect(self._save_new_gesture)
         self.management_panel.new_mapping_to_save.connect(self._save_new_mapping)
     
@@ -130,16 +126,11 @@ class GestureMapperGUI(QMainWindow):
         """Loads the latest config and updates all relevant components."""
         self.config_manager.load_config()
         new_config = self.config_manager.get_config()
-        
-        # Update the backend components with the new configuration
         self.gesture_detector.update_config(new_config)
         self.command_executor.update_mappings(new_config.get('mappings', {}))
-
-        # Update the UI display
         config_text = json.dumps(new_config, indent=2)
         self.config_panel.set_config_text(config_text)
         print("Configuration reloaded and applied to all components.")
-
 
     def _save_new_gesture(self, gesture_data):
         """Saves a new gesture and reloads the configuration."""
@@ -148,7 +139,7 @@ class GestureMapperGUI(QMainWindow):
             self.management_panel.clear_gesture_form()
             self._reload_config()
         else:
-            QMessageBox.critical(self, "Error", "Failed to save gesture. Check for duplicate names or invalid conditions.")
+            QMessageBox.critical(self, "Error", "Failed to save gesture.")
 
     def _save_new_mapping(self, gesture_name, mapping_data):
         """Saves a new mapping and reloads the configuration."""
@@ -157,15 +148,13 @@ class GestureMapperGUI(QMainWindow):
             self.management_panel.clear_mapping_form()
             self._reload_config()
         else:
-            QMessageBox.critical(self, "Error", "Failed to save mapping. Check for invalid JSON.")
+            QMessageBox.critical(self, "Error", "Failed to save mapping.")
 
     def _toggle_commands(self, checked):
         """Enables or disables the execution of gesture commands."""
         self.commands_enabled = checked
         status = "ENABLED" if checked else "DISABLED"
         print(f"Gesture commands {status}.")
-
-    # --- PyQt Slots for handling signals ---
 
     @pyqtSlot(QImage)
     def update_image(self, qt_image):
@@ -174,88 +163,78 @@ class GestureMapperGUI(QMainWindow):
         scaled_pixmap = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.video_label.setPixmap(scaled_pixmap)
 
-
-    @pyqtSlot(list)
-    def on_landmarks_received(self, landmarks):
-        """Stores the latest landmarks and updates the inspector panel."""
-        self.landmarks = landmarks
+    def on_landmarks_received(self, raw_landmarks, normalized_landmarks):
+        """
+        Receives both raw and normalized landmarks from the video thread.
+        Stores them for use in click detection and the inspector panel.
+        """
+        self.raw_landmarks = raw_landmarks
+        self.normalized_landmarks = normalized_landmarks
         self.inspector_panel.update_live_value(
-            self.landmarks, self.selected_points, self.gesture_detector
+            self.normalized_landmarks, self.selected_points, self.gesture_detector
         )
 
     @pyqtSlot(str)
     def on_gesture_detected(self, gesture_name):
         """Handles a detected gesture, updating the UI and executing a command if enabled."""
-        # This is the crucial fix: Always update the UI panel.
         self.inspector_panel.set_detected_gesture(gesture_name)
-
         if self.commands_enabled and gesture_name:
-            # The get_analogue_value is a placeholder for future enhancements
-            analogue_value = self.gesture_detector.get_analogue_value(self.landmarks, gesture_name)
+            analogue_value = self.gesture_detector.get_analogue_value(self.normalized_landmarks, gesture_name)
             self.command_executor.execute_command(gesture_name, analogue_value)
 
     @pyqtSlot(QPoint)
     def on_video_label_clicked(self, pos):
-        """Handles clicks on the video feed to select landmarks, accounting for aspect ratio."""
-        if not self.landmarks or self.video_label.pixmap() is None or self.video_label.pixmap().isNull():
+        """Handles clicks on the video feed to select landmarks, using RAW landmarks."""
+        if not self.raw_landmarks or self.video_label.pixmap() is None or self.video_label.pixmap().isNull():
             return
 
-        # Get label and pixmap dimensions
         label_size = self.video_label.size()
-        pixmap_size = self.video_label.pixmap().size()
-
-        if not pixmap_size.isValid():
-            return
-            
-        # Calculate the scaled pixmap's properties within the label
-        scaled_pixmap = self.video_label.pixmap().scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        scaled_size = scaled_pixmap.size()
-
-        # Calculate the position of the top-left corner of the image (the offset for black bars)
+        pixmap = self.video_label.pixmap()
+        scaled_size = pixmap.size()
+        
         offset_x = (label_size.width() - scaled_size.width()) / 2
         offset_y = (label_size.height() - scaled_size.height()) / 2
-
-        # Adjust click position to be relative to the pixmap, not the label
+        
         img_x = pos.x() - offset_x
         img_y = pos.y() - offset_y
 
-        # Check if the click was inside the actual image area
         if not (0 <= img_x <= scaled_size.width() and 0 <= img_y <= scaled_size.height()):
-            return # Click was on the black bars
+            return
 
-        # Normalize the coordinates to the 0.0 - 1.0 range of the image
         norm_x = img_x / scaled_size.width()
         norm_y = img_y / scaled_size.height()
+        
+        self.click_visualization_signal.emit((norm_x, norm_y))
 
-        # Find the closest landmark to the normalized click position
         min_dist_sq = float('inf')
         closest_landmark_idx = -1
-        for i, landmark in enumerate(self.landmarks):
+        # Use RAW landmarks for click detection
+        for i, landmark in enumerate(self.raw_landmarks):
             dist_sq = (landmark['x'] - norm_x)**2 + (landmark['y'] - norm_y)**2
             if dist_sq < min_dist_sq:
                 min_dist_sq = dist_sq
                 closest_landmark_idx = i
         
-        # Heuristic to decide if the click was close enough to a landmark
-        if closest_landmark_idx != -1 and min_dist_sq < 0.002:
+        TOLERANCE_SQ = 0.002
+        if closest_landmark_idx != -1 and min_dist_sq < TOLERANCE_SQ:
             if closest_landmark_idx in self.selected_points:
                 self.selected_points.remove(closest_landmark_idx)
             else:
                 self.selected_points.append(closest_landmark_idx)
             
-            # Limit selection based on relationship type
             rel_type = self.inspector_panel.relationship_type_combo.currentText()
             max_points = 2 if rel_type == "Distance" else 3
             if len(self.selected_points) > max_points:
-                self.selected_points.pop(0) # Remove the oldest point
+                self.selected_points.pop(0)
             
             self.inspector_panel.set_selected_points_text(self.selected_points)
-
+            self.selection_changed_signal.emit(self.selected_points)
 
     def clear_point_selection(self):
         """Clears the selected points list and updates the UI."""
         self.selected_points.clear()
         self.inspector_panel.clear_selection()
+        self.selection_changed_signal.emit(self.selected_points)
     
     def closeEvent(self, event):
         """Cleanly stops the video thread and releases the camera on exit."""
