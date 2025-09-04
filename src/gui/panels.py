@@ -8,7 +8,7 @@ import json
 import math
 from PyQt5.QtWidgets import (QGroupBox, QFormLayout, QVBoxLayout, QHBoxLayout,
                              QLabel, QPushButton, QTextEdit, QLineEdit,
-                             QComboBox, QMessageBox)
+                             QComboBox, QMessageBox, QSpinBox, QWidget)
 from PyQt5.QtCore import pyqtSignal
 
 class InspectorPanel(QGroupBox):
@@ -213,13 +213,28 @@ class ManagementPanel(QGroupBox):
         
         layout.addRow("---", QLabel()) # Separator
 
-        # Mapping Form
+        # Mapping Form - New Visual Interface
         self.mapping_gesture_name_input = QLineEdit()
-        self.mapping_details_input = QTextEdit()
+        
+        # Command type selection
+        self.command_type_combo = QComboBox()
+        self.command_type_combo.addItems(["key_press", "mouse_click", "scroll"])
+        self.command_type_combo.currentTextChanged.connect(self._update_command_widgets)
+        
+        # Dynamic command options container
+        self.command_options_widget = QWidget()
+        self.command_options_layout = QFormLayout()
+        self.command_options_widget.setLayout(self.command_options_layout)
+        
+        # Initialize with default widgets
+        self._create_command_widgets("key_press")
+        
         add_mapping_button = QPushButton("Save New Mapping")
         add_mapping_button.clicked.connect(self._emit_new_mapping)
+        
         layout.addRow("Mapping Gesture Name:", self.mapping_gesture_name_input)
-        layout.addRow("Mapping (JSON):", self.mapping_details_input)
+        layout.addRow("Command Type:", self.command_type_combo)
+        layout.addRow("Command Options:", self.command_options_widget)
         layout.addRow(add_mapping_button)
 
         self.setLayout(layout)
@@ -275,18 +290,81 @@ class ManagementPanel(QGroupBox):
         except json.JSONDecodeError:
             QMessageBox.warning(self, "Input Error", "Invalid JSON in the conditions field.")
 
+    def _create_command_widgets(self, command_type):
+        """Create dynamic widgets based on the selected command type."""
+        # Clear existing widgets
+        for i in reversed(range(self.command_options_layout.count())):
+            child = self.command_options_layout.itemAt(i).widget()
+            if child:
+                child.setParent(None)
+        
+        # Store widget references for later access
+        self.command_widgets = {}
+        
+        if command_type == "key_press":
+            self.command_widgets['key'] = QLineEdit()
+            self.command_widgets['key'].setPlaceholderText("e.g., 'w', 'enter', 'space'")
+            self.command_options_layout.addRow("Key:", self.command_widgets['key'])
+            
+        elif command_type == "mouse_click":
+            self.command_widgets['button'] = QComboBox()
+            self.command_widgets['button'].addItems(["left", "right", "middle"])
+            self.command_widgets['clicks'] = QSpinBox()
+            self.command_widgets['clicks'].setRange(1, 10)
+            self.command_widgets['clicks'].setValue(1)
+            self.command_options_layout.addRow("Button:", self.command_widgets['button'])
+            self.command_options_layout.addRow("Number of Clicks:", self.command_widgets['clicks'])
+            
+        elif command_type == "scroll":
+            self.command_widgets['direction'] = QComboBox()
+            self.command_widgets['direction'].addItems(["up", "down", "left", "right"])
+            self.command_widgets['sensitivity'] = QSpinBox()
+            self.command_widgets['sensitivity'].setRange(1, 100)
+            self.command_widgets['sensitivity'].setValue(10)
+            self.command_options_layout.addRow("Direction:", self.command_widgets['direction'])
+            self.command_options_layout.addRow("Sensitivity:", self.command_widgets['sensitivity'])
+
+    def _update_command_widgets(self, command_type):
+        """Update the command options when the type changes."""
+        self._create_command_widgets(command_type)
+
     def _emit_new_mapping(self):
         """Validates and emits mapping data to be saved."""
         gesture_name = self.mapping_gesture_name_input.text()
-        mapping_str = self.mapping_details_input.toPlainText()
-        if not gesture_name or not mapping_str:
-            QMessageBox.warning(self, "Input Error", "Please provide a gesture name and mapping details.")
+        if not gesture_name:
+            QMessageBox.warning(self, "Input Error", "Please provide a gesture name.")
             return
+        
+        # Build mapping from current widget values
+        command_type = self.command_type_combo.currentText()
+        mapping = {"type": command_type}
+        
         try:
-            mapping = json.loads(mapping_str)
+            if command_type == "key_press":
+                key = self.command_widgets['key'].text().strip()
+                if not key:
+                    QMessageBox.warning(self, "Input Error", "Please enter a key.")
+                    return
+                mapping["key"] = key
+                
+            elif command_type == "mouse_click":
+                button = self.command_widgets['button'].currentText()
+                clicks = self.command_widgets['clicks'].value()
+                mapping["button"] = button
+                mapping["clicks"] = clicks
+                
+            elif command_type == "scroll":
+                direction = self.command_widgets['direction'].currentText()
+                sensitivity = self.command_widgets['sensitivity'].value()
+                mapping["direction"] = direction
+                mapping["sensitivity"] = sensitivity
+            
             self.new_mapping_to_save.emit(gesture_name, mapping)
-        except json.JSONDecodeError:
-            QMessageBox.warning(self, "Input Error", "Invalid JSON in the mapping field.")
+            
+        except KeyError as e:
+            QMessageBox.warning(self, "Input Error", f"Missing required field: {e}")
+        except Exception as e:
+            QMessageBox.warning(self, "Input Error", f"Error creating mapping: {str(e)}")
     
     def clear_gesture_form(self):
         self.gesture_name_input.clear()
@@ -294,5 +372,7 @@ class ManagementPanel(QGroupBox):
 
     def clear_mapping_form(self):
         self.mapping_gesture_name_input.clear()
-        self.mapping_details_input.clear()
+        # Reset command type to default and clear all widgets
+        self.command_type_combo.setCurrentText("key_press")
+        self._create_command_widgets("key_press")
 
