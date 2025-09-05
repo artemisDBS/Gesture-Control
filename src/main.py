@@ -9,7 +9,7 @@ import math
 import time
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout,
-                             QVBoxLayout, QMessageBox, QSplitter, QCheckBox, QSizePolicy)
+                             QVBoxLayout, QMessageBox, QSplitter, QCheckBox, QSizePolicy, QTabWidget)
 from PyQt5.QtCore import Qt, pyqtSlot, QPoint, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage
 
@@ -22,7 +22,8 @@ from command_executor import CommandExecutor
 # GUI Component Imports
 from gui.video_thread import VideoThread
 from gui.widgets import ClickableLabel
-from gui.panels import InspectorPanel, ConfigPanel, ManagementPanel
+from gui.panels import (CreateGesturePanel, EditGesturePanel, MappingPanel, 
+                       SettingsPanel, InspectorPanel)
 
 
 class GestureMapperGUI(QMainWindow):
@@ -32,11 +33,12 @@ class GestureMapperGUI(QMainWindow):
     """
     selection_changed_signal = pyqtSignal(list)
     click_visualization_signal = pyqtSignal(tuple)
+    gesture_saved_signal = pyqtSignal()  # Signal to refresh other tabs when a gesture is saved
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Gesture Mapper")
-        self.setGeometry(100, 100, 1200, 700)
+        self.setGeometry(100, 100, 1400, 800)
 
         # --- Backend Initialization ---
         self.config_manager = ConfigManager()
@@ -49,11 +51,16 @@ class GestureMapperGUI(QMainWindow):
         self.normalized_landmarks = []
         self.selected_points = []
         self.commands_enabled = False
+        
+        # Gesture Editor State Management
+        self.editing_gesture_name = None
+        self.editing_conditions = []
+        self.selected_condition_index = -1
 
         # --- UI Initialization ---
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.layout = QGridLayout(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
 
         self._setup_ui_panels()
         self._setup_video_thread()
@@ -63,7 +70,23 @@ class GestureMapperGUI(QMainWindow):
         self._reload_config()
 
     def _setup_ui_panels(self):
-        """Creates and arranges the UI panels."""
+        """Creates and arranges the UI panels with the new tab structure."""
+        # Create the main tab widget
+        self.tab_widget = QTabWidget()
+        
+        # Create the four main tabs
+        self.create_gesture_panel = CreateGesturePanel()
+        self.edit_gesture_panel = EditGesturePanel()
+        self.mapping_panel = MappingPanel()
+        self.settings_panel = SettingsPanel()
+        
+        # Add tabs to the tab widget
+        self.tab_widget.addTab(self.create_gesture_panel, "Create Gesture")
+        self.tab_widget.addTab(self.edit_gesture_panel, "Edit Gestures")
+        self.tab_widget.addTab(self.mapping_panel, "Command Mappings")
+        self.tab_widget.addTab(self.settings_panel, "Settings")
+        
+        # Create video panel (shared across all tabs)
         self.video_label = ClickableLabel("Initializing Camera...")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("border: 1px solid #555; background-color: #111;")
@@ -79,24 +102,14 @@ class GestureMapperGUI(QMainWindow):
         video_widget = QWidget()
         video_widget.setLayout(video_layout)
         
-        self.inspector_panel = InspectorPanel()
-        self.config_panel = ConfigPanel()
-        self.management_panel = ManagementPanel()
-
-        right_panel_layout = QVBoxLayout()
-        right_panel_layout.addWidget(self.inspector_panel)
-        right_panel_layout.addWidget(self.config_panel)
-        right_panel_layout.addWidget(self.management_panel)
-        right_panel_widget = QWidget()
-        right_panel_widget.setLayout(right_panel_layout)
-
+        # Create the main splitter with video on left and tabs on right
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(video_widget)
-        splitter.addWidget(right_panel_widget)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
+        splitter.addWidget(self.tab_widget)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
 
-        self.layout.addWidget(splitter, 0, 0)
+        self.layout.addWidget(splitter)
 
     def _setup_video_thread(self):
         """Initializes and starts the background thread for video capture."""
@@ -113,14 +126,35 @@ class GestureMapperGUI(QMainWindow):
     def _connect_signals(self):
         """Connects signals from UI panels to slots in this main window."""
         self.video_label.clicked.connect(self.on_video_label_clicked)
-        self.inspector_panel.snapshot_requested.connect(
-            lambda: self.inspector_panel.snapshot_condition(self.selected_points)
+        
+        # Connect signals from the Create Gesture panel
+        self.create_gesture_panel.snapshot_requested.connect(
+            lambda: self.create_gesture_panel.snapshot_condition(self.selected_points)
         )
-        self.inspector_panel.selection_cleared.connect(self.clear_point_selection)
-        self.inspector_panel.condition_generated.connect(self.management_panel.add_condition_to_form)
-        self.config_panel.reload_requested.connect(self._reload_config)
-        self.management_panel.new_gesture_to_save.connect(self._save_new_gesture)
-        self.management_panel.new_mapping_to_save.connect(self._save_new_mapping)
+        self.create_gesture_panel.selection_cleared.connect(self.clear_point_selection)
+        self.create_gesture_panel.condition_generated.connect(self.create_gesture_panel.add_condition_to_form)
+        self.create_gesture_panel.gesture_saved.connect(self._save_new_gesture)
+        
+        # Connect signals from the Edit Gesture panel
+        self.edit_gesture_panel.snapshot_requested.connect(
+            lambda: self.edit_gesture_panel.snapshot_condition(self.selected_points)
+        )
+        self.edit_gesture_panel.selection_cleared.connect(self.clear_point_selection)
+        self.edit_gesture_panel.condition_generated.connect(self.edit_gesture_panel.add_condition_to_form)
+        self.edit_gesture_panel.condition_updated.connect(self._update_condition)
+        self.edit_gesture_panel.condition_selected.connect(self._on_condition_selected)
+        self.edit_gesture_panel.gesture_updated.connect(self._update_gesture)
+        self.edit_gesture_panel.gesture_deleted.connect(self._delete_gesture)
+        self.edit_gesture_panel.gesture_load_requested.connect(self._load_gesture_for_editing)
+        
+        # Connect signals from the Mapping panel
+        self.mapping_panel.mapping_saved.connect(self._save_new_mapping)
+        
+        # Connect signals from the Settings panel
+        self.settings_panel.settings_saved.connect(self._save_global_settings)
+        
+        # Connect the gesture saved signal to refresh other tabs
+        self.gesture_saved_signal.connect(self._refresh_all_tabs)
     
     def _reload_config(self):
         """Loads the latest config and updates all relevant components."""
@@ -128,16 +162,24 @@ class GestureMapperGUI(QMainWindow):
         new_config = self.config_manager.get_config()
         self.gesture_detector.update_config(new_config)
         self.command_executor.update_mappings(new_config.get('mappings', {}))
-        config_text = json.dumps(new_config, indent=2)
-        self.config_panel.set_config_text(config_text)
+        
+        # Update gesture lists in all panels
+        gesture_names = [gesture['name'] for gesture in new_config.get('gestures', [])]
+        self.edit_gesture_panel.update_gesture_list(gesture_names)
+        self.mapping_panel.update_gesture_list(gesture_names)
+        
+        # Update settings panel with current global settings
+        self.settings_panel.update_settings(new_config.get('transformations', {}))
+        
         print("Configuration reloaded and applied to all components.")
 
     def _save_new_gesture(self, gesture_data):
         """Saves a new gesture and reloads the configuration."""
         if self.config_manager.add_gesture(gesture_data):
             QMessageBox.information(self, "Success", "Gesture saved successfully.")
-            self.management_panel.clear_gesture_form()
+            self.create_gesture_panel.clear_form()
             self._reload_config()
+            self.gesture_saved_signal.emit()
         else:
             QMessageBox.critical(self, "Error", "Failed to save gesture.")
 
@@ -145,10 +187,44 @@ class GestureMapperGUI(QMainWindow):
         """Saves a new mapping and reloads the configuration."""
         if self.config_manager.add_mapping(gesture_name, mapping_data):
             QMessageBox.information(self, "Success", "Mapping saved successfully.")
-            self.management_panel.clear_mapping_form()
+            self.mapping_panel.clear_form()
             self._reload_config()
         else:
             QMessageBox.critical(self, "Error", "Failed to save mapping.")
+    
+    def _update_gesture(self, gesture_name, gesture_data):
+        """Updates an existing gesture."""
+        if self.config_manager.update_gesture(gesture_name, gesture_data):
+            QMessageBox.information(self, "Success", "Gesture updated successfully.")
+            self._reload_config()
+            self.gesture_saved_signal.emit()
+        else:
+            QMessageBox.critical(self, "Error", "Failed to update gesture.")
+    
+    def _delete_gesture(self, gesture_name):
+        """Deletes a gesture."""
+        reply = QMessageBox.question(self, "Confirm Delete", 
+                                   f"Are you sure you want to delete gesture '{gesture_name}'?",
+                                   QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if self.config_manager.remove_gesture(gesture_name):
+                QMessageBox.information(self, "Success", "Gesture deleted successfully.")
+                self._reload_config()
+                self.gesture_saved_signal.emit()
+            else:
+                QMessageBox.critical(self, "Error", "Failed to delete gesture.")
+    
+    def _save_global_settings(self, settings):
+        """Saves global normalization settings."""
+        if self.config_manager.update_transformations(settings):
+            QMessageBox.information(self, "Success", "Settings saved successfully.")
+            self._reload_config()
+        else:
+            QMessageBox.critical(self, "Error", "Failed to save settings.")
+    
+    def _refresh_all_tabs(self):
+        """Refreshes all tabs when a gesture is saved."""
+        self._reload_config()
 
     def _toggle_commands(self, checked):
         """Enables or disables the execution of gesture commands."""
@@ -166,18 +242,26 @@ class GestureMapperGUI(QMainWindow):
     def on_landmarks_received(self, raw_landmarks, normalized_landmarks):
         """
         Receives both raw and normalized landmarks from the video thread.
-        Stores them for use in click detection and the inspector panel.
+        Stores them for use in click detection and the inspector panels.
         """
         self.raw_landmarks = raw_landmarks
         self.normalized_landmarks = normalized_landmarks
-        self.inspector_panel.update_live_value(
-            self.normalized_landmarks, self.selected_points, self.gesture_detector
-        )
+        
+        # Update the current active tab's inspector panel
+        current_tab = self.tab_widget.currentWidget()
+        if hasattr(current_tab, 'update_live_value'):
+            current_tab.update_live_value(
+                self.normalized_landmarks, self.selected_points, self.gesture_detector
+            )
 
     @pyqtSlot(str)
     def on_gesture_detected(self, gesture_name):
         """Handles a detected gesture, updating the UI and executing a command if enabled."""
-        self.inspector_panel.set_detected_gesture(gesture_name)
+        # Update the current active tab's detected gesture display
+        current_tab = self.tab_widget.currentWidget()
+        if hasattr(current_tab, 'set_detected_gesture'):
+            current_tab.set_detected_gesture(gesture_name)
+        
         if self.commands_enabled and gesture_name:
             analogue_value = self.gesture_detector.get_analogue_value(self.normalized_landmarks, gesture_name)
             self.command_executor.execute_command(gesture_name, analogue_value)
@@ -222,19 +306,92 @@ class GestureMapperGUI(QMainWindow):
             else:
                 self.selected_points.append(closest_landmark_idx)
             
-            rel_type = self.inspector_panel.relationship_type_combo.currentText()
-            max_points = 2 if rel_type == "Distance" else 3
-            if len(self.selected_points) > max_points:
-                self.selected_points.pop(0)
+            # Get relationship type from current tab
+            current_tab = self.tab_widget.currentWidget()
+            if hasattr(current_tab, 'relationship_type_combo'):
+                rel_type = current_tab.relationship_type_combo.currentText()
+                max_points = 2 if rel_type == "Distance" else 3
+                if len(self.selected_points) > max_points:
+                    self.selected_points.pop(0)
             
-            self.inspector_panel.set_selected_points_text(self.selected_points)
+            # Update the current tab's selected points display
+            if hasattr(current_tab, 'set_selected_points_text'):
+                current_tab.set_selected_points_text(self.selected_points)
             self.selection_changed_signal.emit(self.selected_points)
 
     def clear_point_selection(self):
         """Clears the selected points list and updates the UI."""
         self.selected_points.clear()
-        self.inspector_panel.clear_selection()
+        current_tab = self.tab_widget.currentWidget()
+        if hasattr(current_tab, 'clear_selection'):
+            current_tab.clear_selection()
         self.selection_changed_signal.emit(self.selected_points)
+
+    def _load_gesture_for_editing(self, gesture_name):
+        """Loads a gesture for editing and populates the condition list."""
+        config = self.config_manager.get_config()
+        gestures = config.get('gestures', [])
+        
+        # Find the gesture
+        gesture = None
+        for g in gestures:
+            if g['name'] == gesture_name:
+                gesture = g
+                break
+        
+        if not gesture:
+            QMessageBox.warning(self, "Error", f"Gesture '{gesture_name}' not found.")
+            return
+        
+        # Store editing state
+        self.editing_gesture_name = gesture_name
+        self.editing_conditions = gesture.get('conditions', []).copy()
+        
+        # Load gesture into the edit panel
+        self.edit_gesture_panel.load_gesture(gesture)
+        
+        # Send conditions to video thread for color coding
+        self.video_thread.update_editing_conditions(self.editing_conditions)
+        
+        print(f"Loaded gesture '{gesture_name}' with {len(self.editing_conditions)} conditions for editing.")
+
+    def _on_condition_selected(self, condition_index):
+        """Handles when a condition is selected from the list for editing."""
+        if condition_index < 0 or condition_index >= len(self.editing_conditions):
+            return
+        
+        self.selected_condition_index = condition_index
+        condition = self.editing_conditions[condition_index]
+        
+        # Load condition into the edit panel for editing
+        self.edit_gesture_panel.load_condition_for_editing(condition, condition_index)
+        
+        # Set the points for visual feedback
+        points = condition.get('points', [])
+        self.selected_points = points.copy()
+        self.edit_gesture_panel.set_selected_points_text(points)
+        self.selection_changed_signal.emit(points)
+        
+        print(f"Selected condition {condition_index} for editing: {condition}")
+
+    def _update_condition(self, condition_index, condition_json):
+        """Updates a condition in the editing list."""
+        try:
+            condition = json.loads(condition_json)
+            if 0 <= condition_index < len(self.editing_conditions):
+                self.editing_conditions[condition_index] = condition
+                
+                # Update the condition list display in the edit panel
+                self.edit_gesture_panel.populate_conditions(self.editing_conditions)
+                
+                # Send updated conditions to video thread
+                self.video_thread.update_editing_conditions(self.editing_conditions)
+                
+                print(f"Updated condition {condition_index}: {condition}")
+            else:
+                QMessageBox.warning(self, "Error", "Invalid condition index.")
+        except json.JSONDecodeError:
+            QMessageBox.warning(self, "Error", "Invalid JSON in condition.")
     
     def closeEvent(self, event):
         """Cleanly stops the video thread and releases the camera on exit."""

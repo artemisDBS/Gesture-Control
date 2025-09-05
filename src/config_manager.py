@@ -274,6 +274,28 @@ class ConfigManager:
             if not self._validate_condition(condition):
                 return False
         
+        # Validate normalization overrides if present
+        if 'normalization_overrides' in gesture:
+            if not self._validate_normalization_overrides(gesture['normalization_overrides']):
+                return False
+        
+        return True
+    
+    def _validate_normalization_overrides(self, overrides: Dict[str, Any]) -> bool:
+        """Validate normalization overrides."""
+        if not isinstance(overrides, dict):
+            logger.error("Normalization overrides must be a dictionary")
+            return False
+        
+        valid_keys = ['displacement_invariant', 'scale_invariant', 'rotation_invariant']
+        for key, value in overrides.items():
+            if key not in valid_keys:
+                logger.error(f"Invalid normalization override key: {key}")
+                return False
+            if not isinstance(value, bool):
+                logger.error(f"Normalization override value for {key} must be boolean")
+                return False
+        
         return True
     
     def _validate_condition(self, condition: Dict[str, Any]) -> bool:

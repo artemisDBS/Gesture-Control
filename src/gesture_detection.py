@@ -35,12 +35,15 @@ class GestureDetector:
         self.gesture_defs = self.config.get('gestures', [])
         print(f"GestureDetector updated with {len(self.gesture_defs)} gestures.")
     
-    def normalize_keypoints(self, landmarks: List[Dict[str, float]]) -> List[Dict[str, float]]:
+    def normalize_keypoints(self, landmarks: List[Dict[str, float]], 
+                          gesture_definition: Optional[Dict] = None) -> List[Dict[str, float]]:
         """
         Apply transformations to make gestures invariant to displacement, scale, and rotation.
+        Uses per-gesture overrides if available, otherwise falls back to global settings.
         
         Args:
             landmarks: List of 21 landmarks with x, y, z coordinates
+            gesture_definition: Optional gesture definition with normalization_overrides
             
         Returns:
             Normalized landmarks
@@ -48,10 +51,18 @@ class GestureDetector:
         if not landmarks or len(landmarks) < 21:
             return landmarks
         
+        # Determine which normalization settings to use
+        if gesture_definition and 'normalization_overrides' in gesture_definition:
+            # Use per-gesture overrides
+            transformations = gesture_definition['normalization_overrides']
+        else:
+            # Use global settings
+            transformations = self.transformations
+        
         normalized = landmarks.copy()
         
         # Displacement invariance: Center on wrist (point 0)
-        if self.transformations.get('displacement_invariant', False):
+        if transformations.get('displacement_invariant', False):
             wrist = landmarks[self.WRIST]
             normalized = [
                 {
@@ -63,7 +74,7 @@ class GestureDetector:
             ]
         
         # Scale invariance: Normalize by hand size
-        if self.transformations.get('scale_invariant', False):
+        if transformations.get('scale_invariant', False):
             # Use distance from wrist to middle finger base as scale reference
             if len(normalized) > self.MIDDLE_FINGER_BASE:
                 scale_factor = self._euclidean_distance(
@@ -82,7 +93,7 @@ class GestureDetector:
                     ]
         
         # Rotation invariance: Rotate so wrist-to-index is vertical
-        if self.transformations.get('rotation_invariant', False):
+        if transformations.get('rotation_invariant', False):
             if len(normalized) > self.INDEX_TIP:
                 # Calculate angle between wrist and index finger
                 angle = self._calculate_angle_2d(
@@ -95,20 +106,24 @@ class GestureDetector:
         
         return normalized
     
-    def detect_gesture(self, normalized_landmarks: List[Dict[str, float]]) -> Optional[str]:
+    def detect_gesture(self, raw_landmarks: List[Dict[str, float]]) -> Optional[str]:
         """
-        Check if the normalized landmarks match any defined gestures.
+        Check if the raw landmarks match any defined gestures.
+        Applies per-gesture normalization for each gesture check.
         
         Args:
-            normalized_landmarks: Normalized hand landmarks
+            raw_landmarks: Raw hand landmarks
             
         Returns:
             Name of detected gesture, or None if no match
         """
-        if not normalized_landmarks or len(normalized_landmarks) < 21:
+        if not raw_landmarks or len(raw_landmarks) < 21:
             return None
         
         for gesture in self.gesture_defs:
+            # Apply per-gesture normalization
+            normalized_landmarks = self.normalize_keypoints(raw_landmarks, gesture)
+            
             if self._check_gesture_conditions(normalized_landmarks, gesture):
                 return gesture['name']
         
@@ -250,18 +265,31 @@ class GestureDetector:
         
         return rotated
     
-    def get_analogue_value(self, landmarks: List[Dict[str, float]], 
+    def get_analogue_value(self, raw_landmarks: List[Dict[str, float]], 
                           gesture_name: str) -> Optional[float]:
         """
         Calculate analogue value for continuous gestures. (Future enhancement)
         
         Args:
-            landmarks: Current hand landmarks
+            raw_landmarks: Current raw hand landmarks
             gesture_name: Name of the detected gesture
             
         Returns:
             Analogue value, or None if not applicable
         """
+        # Find the gesture definition
+        gesture = None
+        for g in self.gesture_defs:
+            if g['name'] == gesture_name:
+                gesture = g
+                break
+        
+        if not gesture:
+            return None
+        
+        # Apply per-gesture normalization
+        normalized_landmarks = self.normalize_keypoints(raw_landmarks, gesture)
+        
         # Placeholder for future implementation where analogue control
         # could be defined in the JSON configuration.
         return None

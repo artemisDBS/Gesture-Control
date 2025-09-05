@@ -14,6 +14,11 @@ LANDMARK_COLOR = (50, 250, 50)  # Green
 CLICK_VIZ_COLOR = (0, 0, 255)    # Red
 TEXT_COLOR = (200, 100, 100) # Light Blue
 
+# Gesture Editor Colors
+DISTANCE_COLOR = (255, 0, 0)     # Blue for distance conditions
+ANGLE_COLOR = (255, 0, 255)      # Magenta for angle conditions
+BOTH_COLOR = (0, 255, 255)       # Cyan for landmarks used in both
+
 LANDMARK_RADIUS = 5
 CLICK_VIZ_RADIUS = 8
 CLICK_VIZ_THICKNESS = 2
@@ -46,6 +51,9 @@ class VideoThread(QThread):
         self.selected_points = []
         self.click_viz_pos = None
         self.click_viz_end_time = 0
+        
+        # Gesture Editor state
+        self.editing_conditions = []
 
     def run(self):
         """
@@ -85,16 +93,47 @@ class VideoThread(QThread):
 
     def draw_landmarks(self, frame, landmarks, selected_points):
         """Draws circles and numbers for each landmark on the frame."""
+        # Determine landmark roles for color coding
+        landmark_roles = self._get_landmark_roles()
+        
         for i, landmark in enumerate(landmarks):
             x = int(landmark['x'] * frame.shape[1])
             y = int(landmark['y'] * frame.shape[0])
 
-            # Use a different color for selected landmarks to provide feedback
-            color = SELECTED_COLOR if i in selected_points else LANDMARK_COLOR
+            # Determine color based on role and selection
+            if i in selected_points:
+                color = SELECTED_COLOR
+            elif i in landmark_roles:
+                role = landmark_roles[i]
+                if 'distance' in role and 'angle' in role:
+                    color = BOTH_COLOR
+                elif 'distance' in role:
+                    color = DISTANCE_COLOR
+                elif 'angle' in role:
+                    color = ANGLE_COLOR
+                else:
+                    color = LANDMARK_COLOR
+            else:
+                color = LANDMARK_COLOR
 
             cv2.circle(frame, (x, y), LANDMARK_RADIUS, color, -1)
             cv2.putText(frame, str(i), (x + 8, y + 8),
                         FONT, FONT_SCALE, TEXT_COLOR, FONT_THICKNESS)
+
+    def _get_landmark_roles(self):
+        """Determines the role of each landmark based on editing conditions."""
+        landmark_roles = {}
+        
+        for condition in self.editing_conditions:
+            condition_type = condition.get('type', '')
+            points = condition.get('points', [])
+            
+            for point_idx in points:
+                if point_idx not in landmark_roles:
+                    landmark_roles[point_idx] = set()
+                landmark_roles[point_idx].add(condition_type)
+        
+        return landmark_roles
 
     @pyqtSlot(list)
     def update_selected_points(self, points: list):
@@ -106,6 +145,11 @@ class VideoThread(QThread):
         """Receives a normalized click position to visualize for a short duration."""
         self.click_viz_pos = norm_pos
         self.click_viz_end_time = time.time() + 0.5  # Visualize for 0.5 seconds
+
+    @pyqtSlot(list)
+    def update_editing_conditions(self, conditions: list):
+        """Receives the list of conditions for the gesture being edited."""
+        self.editing_conditions = conditions
 
     def stop(self):
         """Sets the flag to gracefully stop the thread's run loop."""
