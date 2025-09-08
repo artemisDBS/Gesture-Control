@@ -235,14 +235,15 @@ class InspectorPanel(QGroupBox):
 
 
 class CreateGesturePanel(QWidget):
-    """Panel for creating new gestures from scratch."""
+    """Panel for creating new gestures from scratch.
+    Note: Uses the shared Inspector placed under the video. This panel only
+    displays and manages the list of conditions in a human-friendly way.
+    """
     gesture_saved = pyqtSignal(dict)
-    condition_generated = pyqtSignal(str)
-    selection_cleared = pyqtSignal()
-    snapshot_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.conditions = []  # stores parsed condition dicts
         self._setup_ui()
 
     def _setup_ui(self):
@@ -255,14 +256,11 @@ class CreateGesturePanel(QWidget):
         name_layout.addRow("Gesture Name:", self.gesture_name_input)
         layout.addLayout(name_layout)
         
-        # Create splitter for inspector and conditions
-        splitter = QSplitter(Qt.Horizontal)
-        
-        # Left side: Inspector panel
+        # Local inspector placed between name and conditions
         self.inspector_panel = InspectorPanel()
-        splitter.addWidget(self.inspector_panel)
-        
-        # Right side: Conditions list and normalization settings
+        layout.addWidget(self.inspector_panel)
+
+        # Conditions list and normalization settings
         right_widget = QWidget()
         right_layout = QVBoxLayout()
         
@@ -272,7 +270,7 @@ class CreateGesturePanel(QWidget):
         
         self.conditions_list = QListWidget()
         self.conditions_list.setMaximumHeight(200)
-        conditions_layout.addWidget(QLabel("Conditions:"))
+        # Panel already titled, remove redundant 'Conditions:' label
         conditions_layout.addWidget(self.conditions_list)
         
         # Condition management buttons
@@ -288,46 +286,21 @@ class CreateGesturePanel(QWidget):
         conditions_group.setLayout(conditions_layout)
         right_layout.addWidget(conditions_group)
         
-        # Advanced Normalization Settings
-        self.normalization_group = QGroupBox("Advanced Normalization")
-        self.normalization_group.setCheckable(True)
-        self.normalization_group.setChecked(False)
-        normalization_layout = QFormLayout()
-        
-        self.displacement_checkbox = QCheckBox("Displacement Invariant")
-        self.scale_checkbox = QCheckBox("Scale Invariant")
-        self.rotation_checkbox = QCheckBox("Rotation Invariant")
-        
-        normalization_layout.addRow(self.displacement_checkbox)
-        normalization_layout.addRow(self.scale_checkbox)
-        normalization_layout.addRow(self.rotation_checkbox)
-        
-        self.normalization_group.setLayout(normalization_layout)
-        right_layout.addWidget(self.normalization_group)
-        
         # Save button
         self.save_button = QPushButton("Save New Gesture")
         self.save_button.clicked.connect(self._save_gesture)
         right_layout.addWidget(self.save_button)
         
         right_widget.setLayout(right_layout)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        
-        layout.addWidget(splitter)
+        layout.addWidget(right_widget)
         self.setLayout(layout)
-        
-        # Connect signals
-        self.inspector_panel.condition_generated.connect(self.add_condition_to_form)
-        self.inspector_panel.selection_cleared.connect(self.selection_cleared.emit)
-        self.inspector_panel.snapshot_requested.connect(self.snapshot_requested.emit)
 
     def add_condition_to_form(self, condition_str):
         """Adds a condition to the conditions list."""
         try:
             condition = json.loads(condition_str)
-            self.conditions_list.addItem(json.dumps(condition, indent=2))
+            self.conditions.append(condition)
+            self.conditions_list.addItem(self._describe_condition(condition))
         except json.JSONDecodeError:
             QMessageBox.warning(self, "Error", "Invalid condition JSON.")
 
@@ -335,10 +308,12 @@ class CreateGesturePanel(QWidget):
         """Removes the selected condition from the list."""
         current_row = self.conditions_list.currentRow()
         if current_row >= 0:
+            self.conditions.pop(current_row)
             self.conditions_list.takeItem(current_row)
 
     def _clear_all_conditions(self):
         """Clears all conditions from the list."""
+        self.conditions.clear()
         self.conditions_list.clear()
 
     def _save_gesture(self):
@@ -348,65 +323,54 @@ class CreateGesturePanel(QWidget):
             QMessageBox.warning(self, "Error", "Please enter a gesture name.")
             return
         
-        # Collect conditions
-        conditions = []
-        for i in range(self.conditions_list.count()):
-            try:
-                condition = json.loads(self.conditions_list.item(i).text())
-                conditions.append(condition)
-            except json.JSONDecodeError:
-                QMessageBox.warning(self, "Error", f"Invalid condition at position {i+1}.")
-                return
-        
-        if not conditions:
+        # Use collected parsed conditions
+        if not self.conditions:
             QMessageBox.warning(self, "Error", "Please add at least one condition.")
             return
         
         # Create gesture data
         gesture_data = {
             "name": name,
-            "conditions": conditions
+            "conditions": self.conditions.copy()
         }
         
-        # Add normalization overrides if specified
-        if self.normalization_group.isChecked():
-            gesture_data["normalization_overrides"] = {
-                "displacement_invariant": self.displacement_checkbox.isChecked(),
-                "scale_invariant": self.scale_checkbox.isChecked(),
-                "rotation_invariant": self.rotation_checkbox.isChecked()
-            }
+        # Note: Normalization overrides are now handled by the main window's left panel
         
         self.gesture_saved.emit(gesture_data)
+
+    def _describe_condition(self, condition: dict) -> str:
+        ctype = condition.get('type', 'unknown')
+        importance = condition.get('importance', 'loose')
+        if ctype == 'distance' and len(condition.get('points', [])) == 2:
+            p = condition['points']
+            base = f"Distance between points {p[0]} and {p[1]}"
+            if 'min' in condition and 'max' in condition:
+                base += f" (between {condition['min']:.3f} and {condition['max']:.3f})"
+            elif 'max' in condition:
+                base += f" (less than {condition['max']:.3f})"
+            elif 'min' in condition:
+                base += f" (greater than {condition['min']:.3f})"
+            return base + f" [{importance}]"
+        if ctype == 'angle' and len(condition.get('points', [])) == 3:
+            p = condition['points']
+            base = f"Angle at {p[1]} between {p[0]} and {p[2]}"
+            if 'min' in condition and 'max' in condition:
+                base += f" (between {condition['min']:.2f}° and {condition['max']:.2f}°)"
+            elif 'max' in condition:
+                base += f" (less than {condition['max']:.2f}°)"
+            elif 'min' in condition:
+                base += f" (greater than {condition['min']:.2f}°)"
+            return base + f" [{importance}]"
+        return ctype.title()
 
     def clear_form(self):
         """Clears the form for creating a new gesture."""
         self.gesture_name_input.clear()
+        self.conditions.clear()
         self.conditions_list.clear()
-        self.normalization_group.setChecked(False)
-        self.displacement_checkbox.setChecked(False)
-        self.scale_checkbox.setChecked(False)
-        self.rotation_checkbox.setChecked(False)
-        self.inspector_panel.clear_selection()
+        # nothing else to clear beyond list
 
-    def set_detected_gesture(self, gesture_name):
-        """Updates the detected gesture display."""
-        self.inspector_panel.set_detected_gesture(gesture_name)
-
-    def update_live_value(self, landmarks, selected_points, gesture_detector):
-        """Updates the live value display."""
-        self.inspector_panel.update_live_value(landmarks, selected_points, gesture_detector)
-
-    def set_selected_points_text(self, points):
-        """Sets the selected points text."""
-        self.inspector_panel.set_selected_points_text(points)
-
-    def clear_selection(self):
-        """Clears the selection."""
-        self.inspector_panel.clear_selection()
-
-    def snapshot_condition(self, selected_points):
-        """Takes a snapshot of the current condition."""
-        self.inspector_panel.snapshot_condition(selected_points)
+    # Shared inspector handles live values and snapshots
 
 
 class EditGesturePanel(QWidget):
@@ -429,25 +393,25 @@ class EditGesturePanel(QWidget):
     def _setup_ui(self):
         layout = QVBoxLayout()
         
-        # Gesture selection
+        # Gesture selection with helper hint
         selection_layout = QHBoxLayout()
         self.gesture_selector = QComboBox()
         self.gesture_selector.setPlaceholderText("Select a gesture to edit...")
+        self.gesture_selector.currentIndexChanged.connect(self._load_gesture)
         self.load_button = QPushButton("Load Gesture")
         self.load_button.clicked.connect(self._load_gesture)
         selection_layout.addWidget(QLabel("Gesture:"))
         selection_layout.addWidget(self.gesture_selector)
         selection_layout.addWidget(self.load_button)
         layout.addLayout(selection_layout)
+
+        # Remove guidance text to save space
         
-        # Create splitter for inspector and conditions
-        splitter = QSplitter(Qt.Horizontal)
-        
-        # Left side: Inspector panel
+        # Local inspector placed above the conditions list
         self.inspector_panel = InspectorPanel()
-        splitter.addWidget(self.inspector_panel)
-        
-        # Right side: Conditions list and controls
+        layout.addWidget(self.inspector_panel)
+
+        # Conditions list and controls
         right_widget = QWidget()
         right_layout = QVBoxLayout()
         
@@ -468,7 +432,7 @@ class EditGesturePanel(QWidget):
         self.conditions_list = QListWidget()
         self.conditions_list.setMaximumHeight(200)
         self.conditions_list.itemClicked.connect(self._on_condition_selected)
-        conditions_layout.addWidget(QLabel("Conditions:"))
+        # Remove redundant 'Conditions:' label
         conditions_layout.addWidget(self.conditions_list)
         
         # Condition management buttons
@@ -512,18 +476,9 @@ class EditGesturePanel(QWidget):
         right_layout.addLayout(action_buttons)
         
         right_widget.setLayout(right_layout)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        
-        layout.addWidget(splitter)
+        layout.addWidget(right_widget)
         self.setLayout(layout)
-        
-        # Connect signals
-        self.inspector_panel.condition_generated.connect(self.add_condition_to_form)
-        self.inspector_panel.condition_updated.connect(self.condition_updated.emit)
-        self.inspector_panel.selection_cleared.connect(self.selection_cleared.emit)
-        self.inspector_panel.snapshot_requested.connect(self.snapshot_requested.emit)
+
 
     def update_gesture_list(self, gesture_names):
         """Updates the gesture selector dropdown."""

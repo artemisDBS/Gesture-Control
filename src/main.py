@@ -9,7 +9,7 @@ import math
 import time
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout,
-                             QVBoxLayout, QMessageBox, QSplitter, QCheckBox, QSizePolicy, QTabWidget)
+                             QVBoxLayout, QMessageBox, QSplitter, QCheckBox, QSizePolicy, QTabWidget, QGroupBox, QFormLayout)
 from PyQt5.QtCore import Qt, pyqtSlot, QPoint, pyqtSignal
 from PyQt5.QtGui import QPixmap, QImage
 
@@ -79,14 +79,14 @@ class GestureMapperGUI(QMainWindow):
         self.edit_gesture_panel = EditGesturePanel()
         self.mapping_panel = MappingPanel()
         self.settings_panel = SettingsPanel()
-        
+
         # Add tabs to the tab widget
         self.tab_widget.addTab(self.create_gesture_panel, "Create Gesture")
         self.tab_widget.addTab(self.edit_gesture_panel, "Edit Gestures")
         self.tab_widget.addTab(self.mapping_panel, "Command Mappings")
         self.tab_widget.addTab(self.settings_panel, "Settings")
-        
-        # Create video panel (shared across all tabs)
+
+        # Create video panel (left column)
         self.video_label = ClickableLabel("Initializing Camera...")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("border: 1px solid #555; background-color: #111;")
@@ -95,10 +95,31 @@ class GestureMapperGUI(QMainWindow):
 
         self.enable_commands_checkbox = QCheckBox("Enable Gesture Commands")
         self.enable_commands_checkbox.toggled.connect(self._toggle_commands)
+        self.enable_commands_checkbox.setStyleSheet("font-size: 16px; font-weight: bold;")
+
+        # Advanced Normalization panel for the left side
+        self.normalization_group = QGroupBox("Advanced Normalization")
+        self.normalization_group.setCheckable(True)
+        self.normalization_group.setChecked(False)
+        normalization_layout = QFormLayout()
+        
+        self.displacement_checkbox = QCheckBox("Displacement Invariant")
+        self.displacement_checkbox.setToolTip("Center landmarks on the wrist so hand position doesn't matter.")
+        self.scale_checkbox = QCheckBox("Scale Invariant")
+        self.scale_checkbox.setToolTip("Normalize by hand size so distance-based rules are comparable.")
+        self.rotation_checkbox = QCheckBox("Rotation Invariant")
+        self.rotation_checkbox.setToolTip("Rotate landmarks so wrist→index is vertical; ignores wrist twist.")
+        
+        normalization_layout.addRow(self.displacement_checkbox)
+        normalization_layout.addRow(self.scale_checkbox)
+        normalization_layout.addRow(self.rotation_checkbox)
+        
+        self.normalization_group.setLayout(normalization_layout)
 
         video_layout = QVBoxLayout()
-        video_layout.addWidget(self.video_label)
+        video_layout.addWidget(self.video_label, 5)
         video_layout.addWidget(self.enable_commands_checkbox)
+        video_layout.addWidget(self.normalization_group)
         video_widget = QWidget()
         video_widget.setLayout(video_layout)
         
@@ -106,8 +127,9 @@ class GestureMapperGUI(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(video_widget)
         splitter.addWidget(self.tab_widget)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        # Make video column ~45% of width (approximate using stretch ratios)
+        splitter.setStretchFactor(0, 9)
+        splitter.setStretchFactor(1, 11)
 
         self.layout.addWidget(splitter)
 
@@ -127,31 +149,37 @@ class GestureMapperGUI(QMainWindow):
         """Connects signals from UI panels to slots in this main window."""
         self.video_label.clicked.connect(self.on_video_label_clicked)
         
-        # Connect signals from the Create Gesture panel
-        self.create_gesture_panel.snapshot_requested.connect(
-            lambda: self.create_gesture_panel.snapshot_condition(self.selected_points)
+        # Panel-specific signals and inspectors
+        # Create tab inspector
+        self.create_gesture_panel.inspector_panel.snapshot_requested.connect(
+            lambda: self.create_gesture_panel.inspector_panel.snapshot_condition(self.selected_points)
         )
-        self.create_gesture_panel.selection_cleared.connect(self.clear_point_selection)
-        self.create_gesture_panel.condition_generated.connect(self.create_gesture_panel.add_condition_to_form)
+        self.create_gesture_panel.inspector_panel.selection_cleared.connect(self.clear_point_selection)
+        self.create_gesture_panel.inspector_panel.condition_generated.connect(self.create_gesture_panel.add_condition_to_form)
+        self.create_gesture_panel.inspector_panel.condition_updated.connect(self._update_condition)
         self.create_gesture_panel.gesture_saved.connect(self._save_new_gesture)
-        
-        # Connect signals from the Edit Gesture panel
-        self.edit_gesture_panel.snapshot_requested.connect(
-            lambda: self.edit_gesture_panel.snapshot_condition(self.selected_points)
-        )
-        self.edit_gesture_panel.selection_cleared.connect(self.clear_point_selection)
-        self.edit_gesture_panel.condition_generated.connect(self.edit_gesture_panel.add_condition_to_form)
-        self.edit_gesture_panel.condition_updated.connect(self._update_condition)
         self.edit_gesture_panel.condition_selected.connect(self._on_condition_selected)
         self.edit_gesture_panel.gesture_updated.connect(self._update_gesture)
         self.edit_gesture_panel.gesture_deleted.connect(self._delete_gesture)
         self.edit_gesture_panel.gesture_load_requested.connect(self._load_gesture_for_editing)
+        # Edit tab inspector
+        self.edit_gesture_panel.inspector_panel.snapshot_requested.connect(
+            lambda: self.edit_gesture_panel.inspector_panel.snapshot_condition(self.selected_points)
+        )
+        self.edit_gesture_panel.inspector_panel.selection_cleared.connect(self.clear_point_selection)
+        self.edit_gesture_panel.inspector_panel.condition_generated.connect(self.edit_gesture_panel.add_condition_to_form)
+        self.edit_gesture_panel.inspector_panel.condition_updated.connect(self._update_condition)
         
         # Connect signals from the Mapping panel
         self.mapping_panel.mapping_saved.connect(self._save_new_mapping)
         
         # Connect signals from the Settings panel
         self.settings_panel.settings_saved.connect(self._save_global_settings)
+        
+        # Connect normalization controls to save global settings
+        self.displacement_checkbox.toggled.connect(self._save_global_settings_from_left_panel)
+        self.scale_checkbox.toggled.connect(self._save_global_settings_from_left_panel)
+        self.rotation_checkbox.toggled.connect(self._save_global_settings_from_left_panel)
         
         # Connect the gesture saved signal to refresh other tabs
         self.gesture_saved_signal.connect(self._refresh_all_tabs)
@@ -171,10 +199,24 @@ class GestureMapperGUI(QMainWindow):
         # Update settings panel with current global settings
         self.settings_panel.update_settings(new_config.get('transformations', {}))
         
+        # Update main window normalization controls with global settings
+        transformations = new_config.get('transformations', {})
+        self.displacement_checkbox.setChecked(transformations.get('displacement_invariant', False))
+        self.scale_checkbox.setChecked(transformations.get('scale_invariant', False))
+        self.rotation_checkbox.setChecked(transformations.get('rotation_invariant', False))
+        
         print("Configuration reloaded and applied to all components.")
 
     def _save_new_gesture(self, gesture_data):
         """Saves a new gesture and reloads the configuration."""
+        # Add normalization overrides from the left panel if enabled
+        if self.normalization_group.isChecked():
+            gesture_data["normalization_overrides"] = {
+                "displacement_invariant": self.displacement_checkbox.isChecked(),
+                "scale_invariant": self.scale_checkbox.isChecked(),
+                "rotation_invariant": self.rotation_checkbox.isChecked()
+            }
+        
         if self.config_manager.add_gesture(gesture_data):
             QMessageBox.information(self, "Success", "Gesture saved successfully.")
             self.create_gesture_panel.clear_form()
@@ -225,6 +267,15 @@ class GestureMapperGUI(QMainWindow):
     def _refresh_all_tabs(self):
         """Refreshes all tabs when a gesture is saved."""
         self._reload_config()
+    
+    def _save_global_settings_from_left_panel(self):
+        """Saves global settings when left panel normalization controls change."""
+        settings = {
+            'displacement_invariant': self.displacement_checkbox.isChecked(),
+            'scale_invariant': self.scale_checkbox.isChecked(),
+            'rotation_invariant': self.rotation_checkbox.isChecked()
+        }
+        self._save_global_settings(settings)
 
     def _toggle_commands(self, checked):
         """Enables or disables the execution of gesture commands."""
@@ -247,20 +298,20 @@ class GestureMapperGUI(QMainWindow):
         self.raw_landmarks = raw_landmarks
         self.normalized_landmarks = normalized_landmarks
         
-        # Update the current active tab's inspector panel
+        # Update active tab inspector live values
         current_tab = self.tab_widget.currentWidget()
-        if hasattr(current_tab, 'update_live_value'):
-            current_tab.update_live_value(
+        if hasattr(current_tab, 'inspector_panel'):
+            current_tab.inspector_panel.update_live_value(
                 self.normalized_landmarks, self.selected_points, self.gesture_detector
             )
 
     @pyqtSlot(str)
     def on_gesture_detected(self, gesture_name):
         """Handles a detected gesture, updating the UI and executing a command if enabled."""
-        # Update the current active tab's detected gesture display
+        # Update detected gesture display on active inspector
         current_tab = self.tab_widget.currentWidget()
-        if hasattr(current_tab, 'set_detected_gesture'):
-            current_tab.set_detected_gesture(gesture_name)
+        if hasattr(current_tab, 'inspector_panel'):
+            current_tab.inspector_panel.set_detected_gesture(gesture_name)
         
         if self.commands_enabled and gesture_name:
             analogue_value = self.gesture_detector.get_analogue_value(self.normalized_landmarks, gesture_name)
@@ -306,25 +357,28 @@ class GestureMapperGUI(QMainWindow):
             else:
                 self.selected_points.append(closest_landmark_idx)
             
-            # Get relationship type from current tab
+            # Get relationship type from active inspector
             current_tab = self.tab_widget.currentWidget()
-            if hasattr(current_tab, 'relationship_type_combo'):
-                rel_type = current_tab.relationship_type_combo.currentText()
-                max_points = 2 if rel_type == "Distance" else 3
-                if len(self.selected_points) > max_points:
-                    self.selected_points.pop(0)
-            
-            # Update the current tab's selected points display
-            if hasattr(current_tab, 'set_selected_points_text'):
-                current_tab.set_selected_points_text(self.selected_points)
+            rel_type = None
+            if hasattr(current_tab, 'inspector_panel'):
+                rel_type = current_tab.inspector_panel.relationship_type_combo.currentText()
+            if rel_type is None:
+                rel_type = "Distance"
+            max_points = 2 if rel_type == "Distance" else 3
+            if len(self.selected_points) > max_points:
+                self.selected_points.pop(0)
+
+            # Update selected points display
+            if hasattr(current_tab, 'inspector_panel'):
+                current_tab.inspector_panel.set_selected_points_text(self.selected_points)
             self.selection_changed_signal.emit(self.selected_points)
 
     def clear_point_selection(self):
         """Clears the selected points list and updates the UI."""
         self.selected_points.clear()
         current_tab = self.tab_widget.currentWidget()
-        if hasattr(current_tab, 'clear_selection'):
-            current_tab.clear_selection()
+        if hasattr(current_tab, 'inspector_panel'):
+            current_tab.inspector_panel.clear_selection()
         self.selection_changed_signal.emit(self.selected_points)
 
     def _load_gesture_for_editing(self, gesture_name):
@@ -363,13 +417,14 @@ class GestureMapperGUI(QMainWindow):
         self.selected_condition_index = condition_index
         condition = self.editing_conditions[condition_index]
         
-        # Load condition into the edit panel for editing
-        self.edit_gesture_panel.load_condition_for_editing(condition, condition_index)
+        # Load condition into the edit tab inspector for editing
+        self.edit_gesture_panel.inspector_panel.load_condition_for_editing(condition)
+        self.edit_gesture_panel.inspector_panel.set_editing_mode(True, condition_index)
         
         # Set the points for visual feedback
         points = condition.get('points', [])
         self.selected_points = points.copy()
-        self.edit_gesture_panel.set_selected_points_text(points)
+        self.edit_gesture_panel.inspector_panel.set_selected_points_text(points)
         self.selection_changed_signal.emit(points)
         
         print(f"Selected condition {condition_index} for editing: {condition}")
@@ -406,6 +461,21 @@ class GestureMapperGUI(QMainWindow):
                 color: #E0E0E0;
                 font-family: Arial, sans-serif;
             }
+            QTabBar::tab {
+                background: #3A3A3A;
+                color: #F5F5F5;
+                padding: 8px 16px;
+                border: 1px solid #555;
+                border-bottom: none;
+            }
+            QTabBar::tab:selected {
+                background: #505050;
+                color: #FFFFFF;
+            }
+            QTabWidget::pane {
+                border: 1px solid #555;
+                top: -1px;
+            }
             QMainWindow {
                 background-color: #222222;
             }
@@ -415,6 +485,13 @@ class GestureMapperGUI(QMainWindow):
                 border-radius: 5px;
                 margin-top: 10px;
                 padding: 10px;
+            }
+            QCheckBox {
+                font-size: 15px;
+            }
+            /* Toggle-like effect for checkboxes (simple styling) */
+            QCheckBox::indicator {
+                width: 22px; height: 22px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
@@ -461,4 +538,5 @@ if __name__ == '__main__':
     window = GestureMapperGUI()
     window.show()
     sys.exit(app.exec_())
+
 
