@@ -119,6 +119,9 @@ class VideoThread(QThread):
             cv2.circle(frame, (x, y), LANDMARK_RADIUS, color, -1)
             cv2.putText(frame, str(i), (x + 8, y + 8),
                         FONT, FONT_SCALE, TEXT_COLOR, FONT_THICKNESS)
+        
+        # Draw lines between landmarks for distance and angle relationships
+        self._draw_relationship_lines(frame, landmarks, landmark_roles)
 
     def _get_landmark_roles(self):
         """Determines the role of each landmark based on editing conditions."""
@@ -134,6 +137,54 @@ class VideoThread(QThread):
                 landmark_roles[point_idx].add(condition_type)
         
         return landmark_roles
+
+    def _draw_relationship_lines(self, frame, landmarks, landmark_roles):
+        """Draws lines between landmarks for distance and angle relationships."""
+        for condition in self.editing_conditions:
+            condition_type = condition.get('type', '')
+            points = condition.get('points', [])
+            
+            if not points or len(landmarks) == 0:
+                continue
+                
+            # Determine line color based on condition type
+            if condition_type == 'distance' and len(points) == 2:
+                line_color = DISTANCE_COLOR
+                thickness = 2
+            elif condition_type == 'angle' and len(points) == 3:
+                line_color = ANGLE_COLOR
+                thickness = 2
+            else:
+                continue
+            
+            # Draw lines between the relevant points
+            if condition_type == 'distance' and len(points) == 2:
+                # Draw line between the two points
+                p1_idx, p2_idx = points[0], points[1]
+                if p1_idx < len(landmarks) and p2_idx < len(landmarks):
+                    x1 = int(landmarks[p1_idx]['x'] * frame.shape[1])
+                    y1 = int(landmarks[p1_idx]['y'] * frame.shape[0])
+                    x2 = int(landmarks[p2_idx]['x'] * frame.shape[1])
+                    y2 = int(landmarks[p2_idx]['y'] * frame.shape[0])
+                    cv2.line(frame, (x1, y1), (x2, y2), line_color, thickness)
+                    
+            elif condition_type == 'angle' and len(points) == 3:
+                # Draw lines from vertex to the other two points
+                vertex_idx, p1_idx, p2_idx = points[1], points[0], points[2]
+                if (vertex_idx < len(landmarks) and 
+                    p1_idx < len(landmarks) and 
+                    p2_idx < len(landmarks)):
+                    
+                    vx = int(landmarks[vertex_idx]['x'] * frame.shape[1])
+                    vy = int(landmarks[vertex_idx]['y'] * frame.shape[0])
+                    
+                    x1 = int(landmarks[p1_idx]['x'] * frame.shape[1])
+                    y1 = int(landmarks[p1_idx]['y'] * frame.shape[0])
+                    x2 = int(landmarks[p2_idx]['x'] * frame.shape[1])
+                    y2 = int(landmarks[p2_idx]['y'] * frame.shape[0])
+                    
+                    cv2.line(frame, (vx, vy), (x1, y1), line_color, thickness)
+                    cv2.line(frame, (vx, vy), (x2, y2), line_color, thickness)
 
     @pyqtSlot(list)
     def update_selected_points(self, points: list):

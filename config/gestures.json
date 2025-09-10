@@ -1,8 +1,8 @@
 {
   "transformations": {
     "displacement_invariant": true,
-    "scale_invariant": false,
-    "rotation_invariant": false
+    "scale_invariant": true,
+    "rotation_invariant": true
   },
   "gestures": [
     {

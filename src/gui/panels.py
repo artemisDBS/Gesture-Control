@@ -174,7 +174,35 @@ class InspectorPanel(QGroupBox):
             QMessageBox.warning(self, "Snapshot Error", "Please select the correct number of points for the chosen relationship (2 for Distance, 3 for Angle).")
             return
 
-        self.generated_condition_display.setText(json.dumps(condition, indent=2))
+        # Display user-friendly text instead of JSON
+        friendly_text = self._describe_condition(condition)
+        self.generated_condition_display.setText(friendly_text)
+
+    def _describe_condition(self, condition: dict) -> str:
+        """Convert a condition dictionary to user-friendly text."""
+        ctype = condition.get('type', 'unknown')
+        importance = condition.get('importance', 'loose')
+        if ctype == 'distance' and len(condition.get('points', [])) == 2:
+            p = condition['points']
+            base = f"Distance between points {p[0]} and {p[1]}"
+            if 'min' in condition and 'max' in condition:
+                base += f" (between {condition['min']:.3f} and {condition['max']:.3f})"
+            elif 'max' in condition:
+                base += f" (less than {condition['max']:.3f})"
+            elif 'min' in condition:
+                base += f" (greater than {condition['min']:.3f})"
+            return base + f" [{importance}]"
+        if ctype == 'angle' and len(condition.get('points', [])) == 3:
+            p = condition['points']
+            base = f"Angle at {p[1]} between {p[0]} and {p[2]}"
+            if 'min' in condition and 'max' in condition:
+                base += f" (between {condition['min']:.2f}° and {condition['max']:.2f}°)"
+            elif 'max' in condition:
+                base += f" (less than {condition['max']:.2f}°)"
+            elif 'min' in condition:
+                base += f" (greater than {condition['min']:.2f}°)"
+            return base + f" [{importance}]"
+        return ctype.title()
 
     def _update_condition(self):
         """Updates the currently selected condition with new values."""
@@ -183,10 +211,39 @@ class InspectorPanel(QGroupBox):
             QMessageBox.warning(self, "Error", "No condition has been generated yet.")
             return
         
+        # Convert user-friendly text back to JSON for the condition
+        # We need to reconstruct the condition from the current form state
+        rel_type = self.relationship_type_combo.currentText()
+        constraint = self.constraint_type_combo.currentText()
+        importance = self.importance_combo.currentText().lower()
+        
+        condition = {
+            "type": rel_type.lower(),
+            "points": [int(x) for x in self.selected_points_label.text().strip('[]').split(',') if x.strip()],
+            "importance": importance
+        }
+        
+        if rel_type == "Distance" and len(condition["points"]) == 2:
+            if "Less Than" in constraint:
+                condition["max"] = round(self.live_value + (self.live_value * (0.05 if importance == "strict" else 0.15)), 4)
+            elif "Greater Than" in constraint:
+                condition["min"] = round(self.live_value - (self.live_value * (0.05 if importance == "strict" else 0.15)), 4)
+        elif rel_type == "Angle" and len(condition["points"]) == 3:
+            if "Between" in constraint:
+                buffer = self.live_value * (0.10 if importance == "strict" else 0.20)
+                condition["min"] = round(self.live_value - buffer, 2)
+                condition["max"] = round(self.live_value + buffer, 2)
+            elif "Less Than" in constraint:
+                condition["max"] = round(self.live_value + (self.live_value * (0.10 if importance == "strict" else 0.20)), 2)
+            elif "Greater Than" in constraint:
+                condition["min"] = round(self.live_value - (self.live_value * (0.10 if importance == "strict" else 0.20)), 2)
+        
+        condition_json = json.dumps(condition, indent=2)
+        
         # Get the current condition index from the parent (main window)
         # This will be set by the main window when a condition is selected
         if hasattr(self, 'editing_condition_index'):
-            self.condition_updated.emit(self.editing_condition_index, condition_str)
+            self.condition_updated.emit(self.editing_condition_index, condition_json)
         else:
             QMessageBox.warning(self, "Error", "No condition selected for editing.")
 
@@ -224,8 +281,9 @@ class InspectorPanel(QGroupBox):
         points = condition.get('points', [])
         self.selected_points_label.setText(str(points))
         
-        # Display the condition in the text area
-        self.generated_condition_display.setText(json.dumps(condition, indent=2))
+        # Display the condition in user-friendly text
+        friendly_text = self._describe_condition(condition)
+        self.generated_condition_display.setText(friendly_text)
 
     def clear_selection(self):
         """Clears the UI elements in the inspector."""
