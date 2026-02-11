@@ -19,26 +19,34 @@ class ConfigManager:
     def __init__(self, config_path: str = "config/gestures.json"):
         """
         Initialize the configuration manager.
-        
-        Args:
-            config_path: Path to the configuration file
+        This constructor now silently ensures a config file exists and then loads it.
         """
         self.config_path = config_path
         self.config = {}
-        # The default_config is now a clean slate.
         self.default_config = self._get_default_config()
         
-        # Ensure config directory exists
-        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        # Ensure the config file exists on initialization, creating a default if necessary.
+        self._ensure_config_file_exists()
         
-        # Load configuration
+        # Load the configuration from the now-guaranteed file.
         self.load_config()
     
+    def _ensure_config_file_exists(self):
+        """Creates a default config file if one doesn't exist. This is a silent startup operation."""
+        try:
+            config_dir = os.path.dirname(self.config_path)
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir)
+            
+            if not os.path.exists(self.config_path):
+                logger.info(f"No config file found. Creating default at {self.config_path}")
+                with open(self.config_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.default_config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Fatal error: Failed to create default config file: {str(e)}")
+
     def _get_default_config(self) -> Dict[str, Any]:
-        """
-        Get the default configuration structure. 
-        This is a blank slate, used for first-time setup or as a fallback.
-        """
+        """Get the default configuration structure."""
         return {
             "transformations": {
                 "displacement_invariant": True,
@@ -51,41 +59,21 @@ class ConfigManager:
     
     def load_config(self) -> bool:
         """
-        Load configuration from file.
-        
-        Returns:
-            True if successful, False otherwise
+        Load configuration from file. This is now primarily for run-time reloads.
         """
         try:
-            if os.path.exists(self.config_path):
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    self.config = json.load(f)
-                logger.info(f"Configuration loaded from {self.config_path}")
-                return True
-            else:
-                logger.warning(f"Configuration file not found at {self.config_path}")
-                logger.info("Creating default (empty) configuration")
-                self.config = self.default_config.copy()
-                self.save_config()
-                return True
-                
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in configuration file: {str(e)}")
-            logger.info("Loading default (empty) configuration as a fallback.")
-            self.config = self.default_config.copy()
-            return False
-        except Exception as e:
-            logger.error(f"Error loading configuration: {str(e)}")
-            logger.info("Loading default (empty) configuration as a fallback.")
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                self.config = json.load(f)
+            logger.info(f"Configuration loaded from {self.config_path}")
+            return True
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            logger.error(f"Error loading config file: {str(e)}. Loading default config as a fallback.")
             self.config = self.default_config.copy()
             return False
     
     def save_config(self) -> bool:
         """
-        Save current configuration to file.
-        
-        Returns:
-            True if successful, False otherwise
+        Save current configuration to file. Intended for user-driven actions.
         """
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
@@ -113,15 +101,7 @@ class ConfigManager:
         return self.config.get('mappings', {}).copy()
     
     def update_transformations(self, transformations: Dict[str, bool]) -> bool:
-        """
-        Update transformation settings.
-        
-        Args:
-            transformations: New transformation settings
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Update transformation settings."""
         try:
             self.config['transformations'] = transformations.copy()
             return self.save_config()
@@ -130,22 +110,12 @@ class ConfigManager:
             return False
     
     def add_gesture(self, gesture: Dict[str, Any]) -> bool:
-        """
-        Add a new gesture definition.
-        
-        Args:
-            gesture: Gesture definition dictionary
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Add a new gesture definition."""
         try:
-            # Validate gesture
             if not self._validate_gesture(gesture):
                 logger.error("Invalid gesture definition")
                 return False
             
-            # Check for duplicate names
             existing_names = [g['name'] for g in self.config.get('gestures', [])]
             if gesture['name'] in existing_names:
                 logger.error(f"Gesture with name '{gesture['name']}' already exists")
@@ -153,24 +123,13 @@ class ConfigManager:
             
             self.config.setdefault('gestures', []).append(gesture)
             return self.save_config()
-            
         except Exception as e:
             logger.error(f"Error adding gesture: {str(e)}")
             return False
     
     def update_gesture(self, gesture_name: str, new_gesture: Dict[str, Any]) -> bool:
-        """
-        Update an existing gesture definition.
-        
-        Args:
-            gesture_name: Name of the gesture to update
-            new_gesture: New gesture definition
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Update an existing gesture definition."""
         try:
-            # Validate gesture
             if not self._validate_gesture(new_gesture):
                 logger.error("Invalid gesture definition")
                 return False
@@ -183,75 +142,44 @@ class ConfigManager:
             
             logger.error(f"Gesture '{gesture_name}' not found")
             return False
-            
         except Exception as e:
             logger.error(f"Error updating gesture: {str(e)}")
             return False
     
     def remove_gesture(self, gesture_name: str) -> bool:
-        """
-        Remove a gesture definition.
-        
-        Args:
-            gesture_name: Name of the gesture to remove
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Remove a gesture definition."""
         try:
             gestures = self.config.get('gestures', [])
             self.config['gestures'] = [g for g in gestures if g['name'] != gesture_name]
             
-            # Also remove the mapping if it exists
             if 'mappings' in self.config and gesture_name in self.config['mappings']:
                 del self.config['mappings'][gesture_name]
             
             return self.save_config()
-            
         except Exception as e:
             logger.error(f"Error removing gesture: {str(e)}")
             return False
     
     def add_mapping(self, gesture_name: str, mapping: Dict[str, Any]) -> bool:
-        """
-        Add or update a gesture-to-command mapping.
-        
-        Args:
-            gesture_name: Name of the gesture
-            mapping: Command mapping definition
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Add or update a gesture-to-command mapping."""
         try:
-            # Validate mapping
             if not self._validate_mapping(mapping):
                 logger.error("Invalid mapping definition")
                 return False
             
             self.config.setdefault('mappings', {})[gesture_name] = mapping.copy()
             return self.save_config()
-            
         except Exception as e:
             logger.error(f"Error adding mapping: {str(e)}")
             return False
     
     def remove_mapping(self, gesture_name: str) -> bool:
-        """
-        Remove a gesture-to-command mapping.
-        
-        Args:
-            gesture_name: Name of the gesture
-            
-        Returns:
-            True if successful, False otherwise
-        """
+        """Remove a gesture-to-command mapping."""
         try:
             if 'mappings' in self.config and gesture_name in self.config['mappings']:
                 del self.config['mappings'][gesture_name]
                 return self.save_config()
             return True
-            
         except Exception as e:
             logger.error(f"Error removing mapping: {str(e)}")
             return False
@@ -259,14 +187,13 @@ class ConfigManager:
     def _validate_gesture(self, gesture: Dict[str, Any]) -> bool:
         """Validate a gesture definition."""
         required_fields = ['name', 'conditions']
-        
         for field in required_fields:
             if field not in gesture:
                 logger.error(f"Missing required field: {field}")
                 return False
         
         conditions = gesture.get('conditions', [])
-        if not isinstance(conditions, list) or len(conditions) == 0:
+        if not isinstance(conditions, list) or not conditions:
             logger.error("Gesture must have at least one condition")
             return False
         
@@ -274,7 +201,6 @@ class ConfigManager:
             if not self._validate_condition(condition):
                 return False
         
-        # Validate normalization overrides if present
         if 'normalization_overrides' in gesture:
             if not self._validate_normalization_overrides(gesture['normalization_overrides']):
                 return False
@@ -300,15 +226,11 @@ class ConfigManager:
     
     def _validate_condition(self, condition: Dict[str, Any]) -> bool:
         """Validate a condition definition."""
-        required_fields = ['type']
-        
-        for field in required_fields:
-            if field not in condition:
-                logger.error(f"Missing required field in condition: {field}")
-                return False
+        if 'type' not in condition:
+            logger.error("Missing required field in condition: 'type'")
+            return False
         
         condition_type = condition['type']
-        
         if condition_type == 'distance':
             return self._validate_distance_condition(condition)
         elif condition_type == 'angle':
@@ -321,49 +243,32 @@ class ConfigManager:
     
     def _validate_distance_condition(self, condition: Dict[str, Any]) -> bool:
         """Validate a distance condition."""
-        if 'points' not in condition or not isinstance(condition['points'], list):
-            logger.error("Distance condition must have 'points' list")
+        if 'points' not in condition or not isinstance(condition['points'], list) or len(condition['points']) != 2:
+            logger.error("Distance condition must have a 'points' list with exactly 2 points")
             return False
-        
-        if len(condition['points']) != 2:
-            logger.error("Distance condition must have exactly 2 points")
+        if 'min' not in condition and 'max' not in condition:
+            logger.error("Distance condition must have a 'min' or 'max' constraint")
             return False
-        
-        has_constraint = 'min' in condition or 'max' in condition
-        if not has_constraint:
-            logger.error("Distance condition must have 'min' or 'max' constraint")
-            return False
-        
         return True
     
     def _validate_angle_condition(self, condition: Dict[str, Any]) -> bool:
         """Validate an angle condition."""
-        if 'points' not in condition or not isinstance(condition['points'], list):
-            logger.error("Angle condition must have 'points' list")
+        if 'points' not in condition or not isinstance(condition['points'], list) or len(condition['points']) != 3:
+            logger.error("Angle condition must have a 'points' list with exactly 3 points")
             return False
-        
-        if len(condition['points']) != 3:
-            logger.error("Angle condition must have exactly 3 points")
+        if 'min' not in condition and 'max' not in condition:
+            logger.error("Angle condition must have a 'min' or 'max' constraint")
             return False
-        
-        has_constraint = 'min' in condition or 'max' in condition
-        if not has_constraint:
-            logger.error("Angle condition must have 'min' or 'max' constraint")
-            return False
-        
         return True
     
     def _validate_position_condition(self, condition: Dict[str, Any]) -> bool:
         """Validate a position condition."""
         if 'point' not in condition:
-            logger.error("Position condition must have 'point' field")
+            logger.error("Position condition must have a 'point' field")
             return False
-        
-        has_constraint = any(k in condition for k in ['x_min', 'x_max', 'y_min', 'y_max'])
-        if not has_constraint:
+        if not any(k in condition for k in ['x_min', 'x_max', 'y_min', 'y_max']):
             logger.error("Position condition must have at least one coordinate constraint")
             return False
-        
         return True
     
     def _validate_mapping(self, mapping: Dict[str, Any]) -> bool:
@@ -373,7 +278,6 @@ class ConfigManager:
             return False
         
         mapping_type = mapping['type']
-        
         if mapping_type == 'key_press': return 'key' in mapping
         elif mapping_type == 'key_hold': return 'key' in mapping
         elif mapping_type == 'mouse_click': return True
@@ -384,3 +288,4 @@ class ConfigManager:
         else:
             logger.error(f"Unknown mapping type: {mapping_type}")
             return False
+

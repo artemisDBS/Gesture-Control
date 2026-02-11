@@ -41,10 +41,6 @@ class InspectorPanel(QGroupBox):
         self.selected_points_label = QLabel("None")
         self.relationship_type_combo = QComboBox()
         self.relationship_type_combo.addItems(["Distance", "Angle"])
-        self.relationship_type_combo.currentTextChanged.connect(self._update_constraint_combo)
-        
-        self.constraint_type_combo = QComboBox()
-        self._update_constraint_combo(self.relationship_type_combo.currentText())
 
         self.live_value_label = QLabel("N/A")
         self.importance_combo = QComboBox()
@@ -52,7 +48,6 @@ class InspectorPanel(QGroupBox):
         
         layout.addRow("Selected Points:", self.selected_points_label)
         layout.addRow("Relationship:", self.relationship_type_combo)
-        layout.addRow("Constraint:", self.constraint_type_combo)
         layout.addRow("Live Value:", self.live_value_label)
         layout.addRow("Importance:", self.importance_combo)
 
@@ -87,31 +82,72 @@ class InspectorPanel(QGroupBox):
             self.detected_gesture_label.setText("None")
             self.detected_gesture_label.setStyleSheet("color: #33AFFF;")
 
-    def _update_constraint_combo(self, text):
-        """Update constraint options based on relationship type."""
-        self.constraint_type_combo.clear()
-        if text == "Distance":
-            self.constraint_type_combo.addItems(["Less Than (Close)", "Greater Than (Far)"])
-        elif text == "Angle":
-            self.constraint_type_combo.addItems(["Between (Exact)", "Less Than (Acute)", "Greater Than (Obtuse)"])
 
     def _emit_condition(self):
-        """Emits the generated condition text if it exists."""
-        condition_str = self.generated_condition_display.toPlainText()
-        if condition_str:
-            self.condition_generated.emit(condition_str)
+        """Emits the generated condition JSON if it exists."""
+        # We need to reconstruct the condition from the current form state
+        rel_type = self.relationship_type_combo.currentText()
+        importance = self.importance_combo.currentText().lower()
+        
+        # Get points from the selected points label
+        points_text = self.selected_points_label.text().strip('[]')
+        if not points_text or points_text == "None":
+            QMessageBox.warning(self, "Error", "No points selected.")
+            return
+        
+        try:
+            points = [int(x.strip()) for x in points_text.split(',') if x.strip()]
+        except ValueError:
+            QMessageBox.warning(self, "Error", "Invalid point selection.")
+            return
+        
+        condition = {
+            "type": rel_type.lower(),
+            "points": points,
+            "importance": importance
+        }
+        
+        if rel_type == "Distance" and len(points) == 2:
+            # Always create a range around the live value
+            percent = 0.05 if importance == "strict" else 0.15
+            buffer = self.live_value * percent
+            condition["min"] = round(self.live_value - buffer, 4)
+            condition["max"] = round(self.live_value + buffer, 4)
+        elif rel_type == "Angle" and len(points) == 3:
+            # Always create a range around the live value
+            percent = 0.10 if importance == "strict" else 0.20
+            buffer = self.live_value * percent
+            condition["min"] = round(self.live_value - buffer, 2)
+            condition["max"] = round(self.live_value + buffer, 2)
         else:
-            QMessageBox.warning(self, "Error", "No condition has been generated yet.")
+            QMessageBox.warning(self, "Error", "Invalid point count for selected relationship type.")
+            return
+        
+        condition_json = json.dumps(condition, indent=2)
+        self.condition_generated.emit(condition_json)
 
     def set_selected_points_text(self, points):
         self.selected_points_label.setText(str(points) if points else "None")
 
-    def update_live_value(self, landmarks, selected_points, gesture_detector):
-        """Calculates and displays the live value based on selected points."""
+    def update_live_value(self, landmarks, selected_points, gesture_detector, gesture_definition=None):
+        """
+        Calculates and displays the live value based on selected points.
+        Normalizes landmarks using the same normalization that will be used during detection.
+        
+        Args:
+            landmarks: Raw landmarks from MediaPipe
+            selected_points: List of landmark indices
+            gesture_detector: GestureDetector instance
+            gesture_definition: Optional gesture definition dict with normalization_overrides.
+                              If None, uses global normalization settings.
+        """
         if not landmarks or not selected_points:
             self.live_value_label.setText("N/A")
             return
             
+        # Normalize landmarks using the same normalization that will be used during detection
+        normalized_landmarks = gesture_detector.normalize_keypoints(landmarks, gesture_definition)
+        
         rel_type = self.relationship_type_combo.currentText()
         num_points = len(selected_points)
         value_text = "N/A"
@@ -119,15 +155,15 @@ class InspectorPanel(QGroupBox):
 
         try:
             if rel_type == "Distance" and num_points == 2:
-                p1 = landmarks[selected_points[0]]
-                p2 = landmarks[selected_points[1]]
+                p1 = normalized_landmarks[selected_points[0]]
+                p2 = normalized_landmarks[selected_points[1]]
                 dist = gesture_detector._euclidean_distance(p1, p2)
                 self.live_value = dist
                 value_text = f"{dist:.4f}"
             elif rel_type == "Angle" and num_points == 3:
-                p1 = landmarks[selected_points[0]]
-                p2 = landmarks[selected_points[1]] # Vertex
-                p3 = landmarks[selected_points[2]]
+                p1 = normalized_landmarks[selected_points[0]]
+                p2 = normalized_landmarks[selected_points[1]] # Vertex
+                p3 = normalized_landmarks[selected_points[2]]
                 angle = gesture_detector._calculate_angle_three_points(p1, p2, p3)
                 self.live_value = angle
                 value_text = f"{angle:.2f}°"
@@ -139,7 +175,6 @@ class InspectorPanel(QGroupBox):
     def snapshot_condition(self, selected_points):
         """Generates a JSON condition based on the current state."""
         rel_type = self.relationship_type_combo.currentText()
-        constraint = self.constraint_type_combo.currentText()
         importance = self.importance_combo.currentText().lower()
         num_points = len(selected_points)
         
@@ -154,22 +189,17 @@ class InspectorPanel(QGroupBox):
         }
 
         if rel_type == "Distance" and num_points == 2:
+            # Always create a range around the live value
             percent = 0.05 if importance == "strict" else 0.15
             buffer = self.live_value * percent
-            if "Less Than" in constraint:
-                condition["max"] = round(self.live_value + buffer, 4)
-            elif "Greater Than" in constraint:
-                condition["min"] = round(self.live_value - buffer, 4)
+            condition["min"] = round(self.live_value - buffer, 4)
+            condition["max"] = round(self.live_value + buffer, 4)
         elif rel_type == "Angle" and num_points == 3:
+            # Always create a range around the live value
             percent = 0.10 if importance == "strict" else 0.20
             buffer = self.live_value * percent
-            if "Between" in constraint:
-                condition["min"] = round(self.live_value - buffer, 2)
-                condition["max"] = round(self.live_value + buffer, 2)
-            elif "Less Than" in constraint:
-                condition["max"] = round(self.live_value + buffer, 2)
-            elif "Greater Than" in constraint:
-                condition["min"] = round(self.live_value - buffer, 2)
+            condition["min"] = round(self.live_value - buffer, 2)
+            condition["max"] = round(self.live_value + buffer, 2)
         else:
             QMessageBox.warning(self, "Snapshot Error", "Please select the correct number of points for the chosen relationship (2 for Distance, 3 for Angle).")
             return
@@ -214,7 +244,6 @@ class InspectorPanel(QGroupBox):
         # Convert user-friendly text back to JSON for the condition
         # We need to reconstruct the condition from the current form state
         rel_type = self.relationship_type_combo.currentText()
-        constraint = self.constraint_type_combo.currentText()
         importance = self.importance_combo.currentText().lower()
         
         condition = {
@@ -224,19 +253,17 @@ class InspectorPanel(QGroupBox):
         }
         
         if rel_type == "Distance" and len(condition["points"]) == 2:
-            if "Less Than" in constraint:
-                condition["max"] = round(self.live_value + (self.live_value * (0.05 if importance == "strict" else 0.15)), 4)
-            elif "Greater Than" in constraint:
-                condition["min"] = round(self.live_value - (self.live_value * (0.05 if importance == "strict" else 0.15)), 4)
+            # Always create a range around the live value
+            percent = 0.05 if importance == "strict" else 0.15
+            buffer = self.live_value * percent
+            condition["min"] = round(self.live_value - buffer, 4)
+            condition["max"] = round(self.live_value + buffer, 4)
         elif rel_type == "Angle" and len(condition["points"]) == 3:
-            if "Between" in constraint:
-                buffer = self.live_value * (0.10 if importance == "strict" else 0.20)
-                condition["min"] = round(self.live_value - buffer, 2)
-                condition["max"] = round(self.live_value + buffer, 2)
-            elif "Less Than" in constraint:
-                condition["max"] = round(self.live_value + (self.live_value * (0.10 if importance == "strict" else 0.20)), 2)
-            elif "Greater Than" in constraint:
-                condition["min"] = round(self.live_value - (self.live_value * (0.10 if importance == "strict" else 0.20)), 2)
+            # Always create a range around the live value
+            percent = 0.10 if importance == "strict" else 0.20
+            buffer = self.live_value * percent
+            condition["min"] = round(self.live_value - buffer, 2)
+            condition["max"] = round(self.live_value + buffer, 2)
         
         condition_json = json.dumps(condition, indent=2)
         
@@ -265,14 +292,6 @@ class InspectorPanel(QGroupBox):
         elif condition_type == 'angle':
             self.relationship_type_combo.setCurrentText("Angle")
         
-        # Update constraint based on condition values
-        if 'min' in condition and 'max' in condition:
-            self.constraint_type_combo.setCurrentText("Between (Exact)")
-        elif 'max' in condition:
-            self.constraint_type_combo.setCurrentText("Less Than (Close)" if condition_type == 'distance' else "Less Than (Acute)")
-        elif 'min' in condition:
-            self.constraint_type_combo.setCurrentText("Greater Than (Far)" if condition_type == 'distance' else "Greater Than (Obtuse)")
-        
         # Set importance
         importance = condition.get('importance', 'loose')
         self.importance_combo.setCurrentText(importance.capitalize())
@@ -280,6 +299,20 @@ class InspectorPanel(QGroupBox):
         # Set points (this will be handled by the main window)
         points = condition.get('points', [])
         self.selected_points_label.setText(str(points))
+        
+        # Calculate the live value from the condition's range for display
+        if 'min' in condition and 'max' in condition:
+            # Use the midpoint of the range as the live value
+            self.live_value = (condition['min'] + condition['max']) / 2
+            self.live_value_label.setText(f"{self.live_value:.4f}" if condition_type == 'distance' else f"{self.live_value:.2f}°")
+        elif 'max' in condition:
+            # Use max value as live value (legacy support)
+            self.live_value = condition['max']
+            self.live_value_label.setText(f"{self.live_value:.4f}" if condition_type == 'distance' else f"{self.live_value:.2f}°")
+        elif 'min' in condition:
+            # Use min value as live value (legacy support)
+            self.live_value = condition['min']
+            self.live_value_label.setText(f"{self.live_value:.4f}" if condition_type == 'distance' else f"{self.live_value:.2f}°")
         
         # Display the condition in user-friendly text
         friendly_text = self._describe_condition(condition)
@@ -344,6 +377,26 @@ class CreateGesturePanel(QWidget):
         conditions_group.setLayout(conditions_layout)
         right_layout.addWidget(conditions_group)
         
+        # Per-gesture normalization overrides
+        self.normalization_group = QGroupBox("Normalization Settings (Override Global Defaults)")
+        self.normalization_group.setCheckable(True)
+        self.normalization_group.setChecked(False)
+        normalization_layout = QFormLayout()
+        
+        self.displacement_checkbox = QCheckBox("Displacement Invariant")
+        self.displacement_checkbox.setToolTip("Center landmarks on the wrist so hand position doesn't matter.")
+        self.scale_checkbox = QCheckBox("Scale Invariant")
+        self.scale_checkbox.setToolTip("Normalize by hand size so distance-based rules are comparable.")
+        self.rotation_checkbox = QCheckBox("Rotation Invariant")
+        self.rotation_checkbox.setToolTip("Rotate landmarks so wrist→middle-finger-base is vertical (more stable than fingertip-based).")
+        
+        normalization_layout.addRow(self.displacement_checkbox)
+        normalization_layout.addRow(self.scale_checkbox)
+        normalization_layout.addRow(self.rotation_checkbox)
+        
+        self.normalization_group.setLayout(normalization_layout)
+        right_layout.addWidget(self.normalization_group)
+        
         # Save button
         self.save_button = QPushButton("Save New Gesture")
         self.save_button.clicked.connect(self._save_gesture)
@@ -392,7 +445,13 @@ class CreateGesturePanel(QWidget):
             "conditions": self.conditions.copy()
         }
         
-        # Note: Normalization overrides are now handled by the main window's left panel
+        # Add normalization overrides if specified
+        if self.normalization_group.isChecked():
+            gesture_data["normalization_overrides"] = {
+                "displacement_invariant": self.displacement_checkbox.isChecked(),
+                "scale_invariant": self.scale_checkbox.isChecked(),
+                "rotation_invariant": self.rotation_checkbox.isChecked()
+            }
         
         self.gesture_saved.emit(gesture_data)
 
@@ -426,7 +485,10 @@ class CreateGesturePanel(QWidget):
         self.gesture_name_input.clear()
         self.conditions.clear()
         self.conditions_list.clear()
-        # nothing else to clear beyond list
+        self.normalization_group.setChecked(False)
+        self.displacement_checkbox.setChecked(False)
+        self.scale_checkbox.setChecked(False)
+        self.rotation_checkbox.setChecked(False)
 
     # Shared inspector handles live values and snapshots
 
@@ -506,15 +568,18 @@ class EditGesturePanel(QWidget):
         conditions_group.setLayout(conditions_layout)
         right_layout.addWidget(conditions_group)
         
-        # Advanced Normalization Settings
-        self.normalization_group = QGroupBox("Advanced Normalization")
+        # Per-gesture normalization overrides
+        self.normalization_group = QGroupBox("Normalization Settings (Override Global Defaults)")
         self.normalization_group.setCheckable(True)
         self.normalization_group.setChecked(False)
         normalization_layout = QFormLayout()
         
         self.displacement_checkbox = QCheckBox("Displacement Invariant")
+        self.displacement_checkbox.setToolTip("Center landmarks on the wrist so hand position doesn't matter.")
         self.scale_checkbox = QCheckBox("Scale Invariant")
+        self.scale_checkbox.setToolTip("Normalize by hand size so distance-based rules are comparable.")
         self.rotation_checkbox = QCheckBox("Rotation Invariant")
+        self.rotation_checkbox.setToolTip("Rotate landmarks so wrist→middle-finger-base is vertical (more stable than fingertip-based).")
         
         normalization_layout.addRow(self.displacement_checkbox)
         normalization_layout.addRow(self.scale_checkbox)
@@ -673,7 +738,9 @@ class EditGesturePanel(QWidget):
 
     def update_live_value(self, landmarks, selected_points, gesture_detector):
         """Updates the live value display."""
-        self.inspector_panel.update_live_value(landmarks, selected_points, gesture_detector)
+        # Pass the current gesture definition so normalization matches what will be used during detection
+        gesture_def = self.current_gesture if self.current_gesture else None
+        self.inspector_panel.update_live_value(landmarks, selected_points, gesture_detector, gesture_def)
 
     def set_selected_points_text(self, points):
         """Sets the selected points text."""
@@ -830,8 +897,11 @@ class SettingsPanel(QWidget):
         settings_layout = QFormLayout()
         
         self.displacement_checkbox = QCheckBox("Displacement Invariant")
+        self.displacement_checkbox.setToolTip("Center landmarks on the wrist so hand position doesn't matter.")
         self.scale_checkbox = QCheckBox("Scale Invariant")
+        self.scale_checkbox.setToolTip("Normalize by hand size so distance-based rules are comparable.")
         self.rotation_checkbox = QCheckBox("Rotation Invariant")
+        self.rotation_checkbox.setToolTip("Rotate landmarks so wrist→middle-finger-base is vertical (more stable than fingertip-based).")
         
         settings_layout.addRow(self.displacement_checkbox)
         settings_layout.addRow(self.scale_checkbox)
@@ -846,7 +916,7 @@ class SettingsPanel(QWidget):
         These settings will be used as defaults for all gestures that don't have their own specific overrides.<br><br>
         <b>Displacement Invariant:</b> Centers gestures on the wrist (point 0)<br>
         <b>Scale Invariant:</b> Normalizes gestures by hand size<br>
-        <b>Rotation Invariant:</b> Rotates gestures so wrist-to-index is vertical
+        <b>Rotation Invariant:</b> Rotates gestures so wrist-to-middle-finger-base is vertical (more stable)
         """)
         info_text.setWordWrap(True)
         info_text.setStyleSheet("color: #888; font-size: 12px;")

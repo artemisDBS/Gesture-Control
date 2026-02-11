@@ -72,10 +72,10 @@ class VideoThread(QThread):
             normalized_landmarks = []
 
             if raw_landmarks:
-                # Normalize landmarks for gesture detection
+                # For UI/editor visualization we can show a default-normalized view
                 normalized_landmarks = self.gesture_detector.normalize_keypoints(raw_landmarks)
-                # Check for a gesture using the normalized data
-                gesture_name = self.gesture_detector.detect_gesture(normalized_landmarks) or ""
+                # IMPORTANT: Run detection on RAW landmarks so per-gesture normalization applies
+                gesture_name = self.gesture_detector.detect_gesture(raw_landmarks) or ""
                 # Draw visualizations on the frame using the raw data
                 self.draw_landmarks(frame, raw_landmarks, self.selected_points)
 

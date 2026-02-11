@@ -82,7 +82,12 @@ class GestureDetector:
                     normalized[self.MIDDLE_FINGER_BASE]
                 )
                 
-                if scale_factor > 0:
+                # Avoid division by zero or very small numbers that cause numerical instability
+                if scale_factor > 1e-6:  # Use a small epsilon instead of just > 0
+                    # Debug: log scale factor occasionally
+                    import random
+                    if random.random() < 0.01:  # Log 1% of the time to avoid spam
+                        print(f"DEBUG: Scale factor = {scale_factor:.6f}")
                     normalized = [
                         {
                             'x': p['x'] / scale_factor,
@@ -91,14 +96,16 @@ class GestureDetector:
                         }
                         for p in normalized
                     ]
+                else:
+                    print(f"WARNING: Scale factor too small ({scale_factor:.9f}), skipping scale normalization")
         
-        # Rotation invariance: Rotate so wrist-to-index is vertical
+        # Rotation invariance: Rotate so wrist-to-middle-finger-base is vertical
         if transformations.get('rotation_invariant', False):
-            if len(normalized) > self.INDEX_TIP:
-                # Calculate angle between wrist and index finger
+            if len(normalized) > self.MIDDLE_FINGER_BASE:
+                # Calculate angle between wrist and middle finger base (more stable than fingertip)
                 angle = self._calculate_angle_2d(
                     normalized[self.WRIST],
-                    normalized[self.INDEX_TIP]
+                    normalized[self.MIDDLE_FINGER_BASE]
                 )
                 
                 # Apply rotation to all points
@@ -124,6 +131,19 @@ class GestureDetector:
             # Apply per-gesture normalization
             normalized_landmarks = self.normalize_keypoints(raw_landmarks, gesture)
             
+            # Debug: show what distances we're calculating for the first gesture
+            if gesture == self.gesture_defs[0] and gesture.get('conditions'):
+                first_condition = gesture['conditions'][0]
+                if first_condition.get('type') == 'distance' and len(first_condition.get('points', [])) == 2:
+                    p1, p2 = first_condition['points']
+                    if p1 < len(normalized_landmarks) and p2 < len(normalized_landmarks):
+                        calc_distance = self._euclidean_distance(normalized_landmarks[p1], normalized_landmarks[p2])
+                        # Also show raw distance for comparison
+                        raw_distance = self._euclidean_distance(raw_landmarks[p1], raw_landmarks[p2])
+                        import random
+                        if random.random() < 0.01:  # Log 1% of the time
+                            print(f"DEBUG: Gesture '{gesture['name']}' - Raw distance {p1}-{p2}: {raw_distance:.6f}, Normalized: {calc_distance:.6f}")
+            
             if self._check_gesture_conditions(normalized_landmarks, gesture):
                 return gesture['name']
         
@@ -133,10 +153,16 @@ class GestureDetector:
         """Check if landmarks satisfy all conditions for a gesture."""
         conditions = gesture.get('conditions', [])
         
-        for condition in conditions:
+        if not conditions:
+            return False
+        
+        for i, condition in enumerate(conditions):
             if not self._evaluate_condition(landmarks, condition):
+                # Debug: show which condition failed
+                print(f"Gesture '{gesture['name']}' failed condition {i+1}/{len(conditions)}: {condition.get('type', 'unknown')}")
                 return False
         
+        print(f"Gesture '{gesture['name']}' matched all {len(conditions)} conditions!")
         return True
     
     def _evaluate_condition(self, landmarks: List[Dict[str, float]], condition: Dict) -> bool:
@@ -164,10 +190,20 @@ class GestureDetector:
         
         distance = self._euclidean_distance(landmarks[point1_idx], landmarks[point2_idx])
         
-        min_dist = condition.get('min', float('-inf'))
-        max_dist = condition.get('max', float('inf'))
+        # Prioritize range-based conditions (both min and max present)
+        if 'min' in condition and 'max' in condition:
+            result = condition['min'] <= distance <= condition['max']
+            # Debug output (can be removed later)
+            if not result:
+                print(f"Distance condition failed: points {point1_idx}-{point2_idx}, distance={distance:.6f}, expected range=[{condition['min']:.6f}, {condition['max']:.6f}]")
+            return result
+        # Fallback to legacy single-boundary conditions
+        elif 'min' in condition:
+            return distance >= condition['min']
+        elif 'max' in condition:
+            return distance <= condition['max']
         
-        return min_dist <= distance <= max_dist
+        return False
     
     def _check_angle_condition(self, landmarks: List[Dict[str, float]], condition: Dict) -> bool:
         """Check if angle between three points meets the condition."""
@@ -185,10 +221,16 @@ class GestureDetector:
             landmarks[p3_idx]
         )
         
-        min_angle = condition.get('min', float('-inf'))
-        max_angle = condition.get('max', float('inf'))
+        # Prioritize range-based conditions (both min and max present)
+        if 'min' in condition and 'max' in condition:
+            return condition['min'] <= angle <= condition['max']
+        # Fallback to legacy single-boundary conditions
+        elif 'min' in condition:
+            return angle >= condition['min']
+        elif 'max' in condition:
+            return angle <= condition['max']
         
-        return min_angle <= angle <= max_angle
+        return False
     
     def _check_position_condition(self, landmarks: List[Dict[str, float]], condition: Dict) -> bool:
         """Check if a point's position meets the condition."""

@@ -2,60 +2,29 @@
   "transformations": {
     "displacement_invariant": true,
     "scale_invariant": true,
-    "rotation_invariant": true
+    "rotation_invariant": false
   },
   "gestures": [
-    {
-      "name": "gun",
-      "conditions": [
-        {
-          "type": "distance",
-          "points": [
-            12,
-            8
-          ],
-          "importance": "strict",
-          "max": 0.25
-        },
-        {
-          "type": "distance",
-          "points": [
-            12,
-            1
-          ],
-          "importance": "strict",
-          "max": 1.9581
-        },
-        {
-          "type": "distance",
-          "points": [
-            1,
-            4
-          ],
-          "importance": "strict",
-          "max": 0.9154
-        }
-      ]
-    },
     {
       "name": "ok",
       "conditions": [
         {
           "type": "distance",
           "points": [
-            4,
-            8
+            8,
+            4
           ],
-          "importance": "strict",
-          "max": 0.2125
+          "importance": "loose",
+          "min": 0.2175,
+          "max": 0.2942
         }
       ]
     }
   ],
   "mappings": {
-    "gun": {
+    "ok": {
       "type": "key_press",
-      "key": "g"
+      "key": "'w'"
     }
   }
 }
